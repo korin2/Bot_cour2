@@ -1,7 +1,7 @@
 import logging
 import requests
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, CallbackContext
+from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 import os
 
@@ -44,34 +44,28 @@ def get_exchange_rates():
         return "Не удалось получить курсы валют. Попробуйте позже."
 
 # Обработчик команды /start
-def start(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text(
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
         'Привет! Я бот, который показывает курсы валют.\n'
         'Используйте команду /rates, чтобы получить актуальные курсы.'
     )
 
 # Обработчик команды /rates
-def rates(update: Update, context: CallbackContext) -> None:
+async def rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     rates_message = get_exchange_rates()
-    update.message.reply_text(rates_message)
+    await update.message.reply_text(rates_message)
 
 def main() -> None:
     """Запуск бота."""
-    # Создаем Updater и передаем ему токен бота
-    updater = Updater(token=TOKEN)
-
-    # Получаем диспетчер для регистрации обработчиков
-    dispatcher = updater.dispatcher
+    # Создаем Application и передаем ему токен бота
+    application = Application.builder().token(TOKEN).build()
 
     # Регистрируем обработчики команд
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CommandHandler("rates", rates))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("rates", rates))
 
-    # Запускаем бота
-    updater.start_polling()
-
-    # Запускаем бота до тех пор, пока не будет нажата комбинация Ctrl+C
-    updater.idle()
+    # Запускаем бота в режиме long polling
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
