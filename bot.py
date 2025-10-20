@@ -150,7 +150,7 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления пользователю {alert['user_id']}: {e}")
 
-# Задача для инициализации БД
+# Задача для инициализации БД/
 async def init_db_job(context: ContextTypes.DEFAULT_TYPE):
     await init_db()
 
