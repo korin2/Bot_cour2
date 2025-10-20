@@ -1,7 +1,7 @@
 import logging
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, JobQueue
 from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, get_all_alerts
 # from dotenv import load_dotenv  # <-- УБРАТЬ
 import os
@@ -149,8 +149,16 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления пользователю {alert['user_id']}: {e}")
 
+# Задача для инициализации БД
+async def init_db_job(context: ContextTypes.DEFAULT_TYPE):
+    await init_db()
+
 def main() -> None:
-    application = Application.builder().token(TOKEN).build()
+    # Создаём Application с JobQueue
+    application = Application.builder().token(TOKEN).job_queue().build()
+
+    # Добавляем задачу инициализации БД, которая выполнится один раз
+    application.job_queue.run_once(init_db_job, when=0.1)
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
@@ -160,17 +168,11 @@ def main() -> None:
     application.add_handler(CommandHandler("setbase", setbase_command))
     application.add_handler(CommandHandler("alert", alert_command))
 
-    # Убираем задачу, если JobQueue не работает
-    # application.job_queue.run_repeating(check_alerts, interval=600, first=10)
+    # Добавляем задачу проверки уведомлений (раз в 10 минут)
+    application.job_queue.run_repeating(check_alerts, interval=600, first=10)
 
     # Запуск бота
     application.run_polling()
 
 if __name__ == '__main__':
-    import asyncio
-
-    # Инициализируем БД до запуска бота
-    asyncio.run(init_db())
-
-    # Запускаем бота (это блокирует выполнение)
-    main()
+    main()  # <-- Просто запускаем main, без asyncio.run()
