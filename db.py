@@ -2,12 +2,17 @@ import asyncpg
 import os
 from typing import Optional
 
+# load_dotenv()  # <-- Закомментируем или удалим эту строку
+
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 if not DATABASE_URL:
+    print("DEBUG: DATABASE_URL не найдена в переменных окружения")
     raise ValueError("Требуется переменная окружения DATABASE_URL")
 
-print(f"Подключаюсь к: {DATABASE_URL}")  # <-- Добавим это для отладки
+print(f"DEBUG: DATABASE_URL = {DATABASE_URL}")  # <-- Отладочное сообщение
+
+# ... остальной код без изменений
 
 async def init_db():
     print("Инициализация БД...")
