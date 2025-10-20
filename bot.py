@@ -144,7 +144,7 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
         if rate is None:
             continue
         if (alert['direction'] == 'above' and rate > alert['threshold']) or \
-           (alert['direction'] == 'below' и rate < alert['threshold']):
+           (alert['direction'] == 'below' and rate < alert['threshold']):
             try:
                 await context.bot.send_message(chat_id=alert['user_id'], text=f"🔔 Уведомление: {alert['from_currency']}/{alert['to_currency']} = {rate:.4f}")
             except Exception as e:
