@@ -2,7 +2,6 @@ import logging
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-# from telegram.ext import JobQueue  # <-- Больше не нужно
 from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, get_all_alerts
 # from dotenv import load_dotenv  # <-- УБРАТЬ
 import os
@@ -136,30 +135,8 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await add_alert(user_id, from_curr, to_curr, threshold, direction)
     await update.message.reply_text(f"Уведомление установлено: {from_curr}/{to_curr} {'>' if direction == 'above' else '<'} {threshold}")
 
-# Фоновая задача для проверки уведомлений
-async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
-    alerts = await get_all_alerts()
-    for alert in alerts:
-        rate = get_exchange_rate(alert['from_currency'], alert['to_currency'])
-        if rate is None:
-            continue
-        if (alert['direction'] == 'above' and rate > alert['threshold']) or \
-           (alert['direction'] == 'below' and rate < alert['threshold']):
-            try:
-                await context.bot.send_message(chat_id=alert['user_id'], text=f"🔔 Уведомление: {alert['from_currency']}/{alert['to_currency']} = {rate:.4f}")
-            except Exception as e:
-                logger.error(f"Ошибка отправки уведомления пользователю {alert['user_id']}: {e}")
-
-# Задача для инициализации БД
-async def init_db_job(context: ContextTypes.DEFAULT_TYPE):
-    await init_db()
-
 def main() -> None:
-    # Создаём Application с JobQueue (теперь .job_queue() без аргументов)
-    application = Application.builder().token(TOKEN).job_queue().build()
-
-    # Добавляем задачу инициализации БД, которая выполнится один раз
-    application.job_queue.run_once(init_db_job, when=0.1)
+    application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
@@ -169,11 +146,17 @@ def main() -> None:
     application.add_handler(CommandHandler("setbase", setbase_command))
     application.add_handler(CommandHandler("alert", alert_command))
 
-    # Добавляем задачу проверки уведомлений (раз в 10 минут)
-    application.job_queue.run_repeating(check_alerts, interval=600, first=10)
+    # Убираем задачу, если JobQueue не работает
+    # application.job_queue.run_repeating(check_alerts, interval=600, first=10)
 
     # Запуск бота
     application.run_polling()
 
 if __name__ == '__main__':
-    main()  # <-- Просто запускаем main, без asyncio.run()
+    import asyncio
+
+    # Инициализируем БД до запуска бота
+    asyncio.run(init_db())
+
+    # Запускаем бота (это блокирует выполнение)
+    main()
