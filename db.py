@@ -4,7 +4,13 @@ from typing import Optional
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
+if not DATABASE_URL:
+    raise ValueError("Требуется переменная окружения DATABASE_URL")
+
+print(f"Подключаюсь к: {DATABASE_URL}")  # <-- Добавим это для отладки
+
 async def init_db():
+    print("Инициализация БД...")
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -25,6 +31,7 @@ async def init_db():
         );
     ''')
     await conn.close()
+    print("БД инициализирована.")
 
 async def get_user_base_currency(user_id: int) -> str:
     conn = await asyncpg.connect(DATABASE_URL)
