@@ -114,4 +114,65 @@ async def setbase_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     currency = args[0].upper()
     user_id = update.effective_message.from_user.id
     await set_user_base_currency(user_id, currency)
-    await
+    await update.message.reply_text(f"Базовая валюта установлена: {currency}")
+
+async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    args = context.args
+    if len(args) != 4:
+        await update.message.reply_text("Используйте: /alert <из> <в> <порог> <above|below>")
+        return
+    from_curr, to_curr = args[0], args[1]
+    try:
+        threshold = float(args[2])
+    except ValueError:
+        await update.message.reply_text("Порог должен быть числом.")
+        return
+    direction = args[3].lower()
+    if direction not in ['above', 'below']:
+        await update.message.reply_text("Направление должно быть 'above' или 'below'.")
+        return
+    user_id = update.effective_message.from_user.id
+    await add_alert(user_id, from_curr, to_curr, threshold, direction)
+    await update.message.reply_text(f"Уведомление установлено: {from_curr}/{to_curr} {'>' if direction == 'above' else '<'} {threshold}")
+
+# Фоновая задача для проверки уведомлений
+async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
+    alerts = await get_all_alerts()
+    for alert in alerts:
+        rate = get_exchange_rate(alert['from_currency'], alert['to_currency'])
+        if rate is None:
+            continue
+        if (alert['direction'] == 'above' and rate > alert['threshold']) or \
+           (alert['direction'] == 'below' and rate < alert['threshold']):
+            try:
+                await context.bot.send_message(chat_id=alert['user_id'], text=f"🔔 Уведомление: {alert['from_currency']}/{alert['to_currency']} = {rate:.4f}")
+            except Exception as e:
+                logger.error(f"Ошибка отправки уведомления пользователю {alert['user_id']}: {e}")
+
+def main() -> None:
+    application = Application.builder().token(TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("rates", rates))
+    application.add_handler(CommandHandler("rate", rate_command))
+    application.add_handler(CommandHandler("convert", convert_command))
+    application.add_handler(CommandHandler("setbase", setbase_command))
+    application.add_handler(CommandHandler("alert", alert_command))
+
+    # Убираем задачу, если JobQueue не работает
+    # application.job_queue.run_repeating(check_alerts, interval=600, first=10)
+
+    application.run_polling()
+
+if __name__ == '__main__':
+    import asyncio
+
+    # Инициализируем БД вручную
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(init_db())
+    loop.close()
+
+    # Запускаем бота (это блокирует выполнение)
+    main()
