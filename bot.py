@@ -168,11 +168,8 @@ def main() -> None:
 if __name__ == '__main__':
     import asyncio
 
-    # Инициализируем БД вручную
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(init_db())
-    loop.close()
+    # Инициализируем БД вручную, используя asyncio.run()
+    asyncio.run(init_db())
 
     # Запускаем бота (это блокирует выполнение)
     main()
