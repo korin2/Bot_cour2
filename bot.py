@@ -149,7 +149,8 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления пользователю {alert['user_id']}: {e}")
 
-def main() -> None:
+async def run_bot():
+    await init_db()  # Инициализация БД
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -163,13 +164,10 @@ def main() -> None:
     # Убираем задачу, если JobQueue не работает
     # application.job_queue.run_repeating(check_alerts, interval=600, first=10)
 
-    application.run_polling()
+    # Запуск бота
+    await application.run_polling()
 
 if __name__ == '__main__':
     import asyncio
 
-    # Инициализируем БД вручную, используя asyncio.run()
-    asyncio.run(init_db())
-
-    # Запускаем бота (это блокирует выполнение)
-    main()
+    asyncio.run(run_bot())  # Запускаем всё в одном цикле
