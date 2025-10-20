@@ -2,7 +2,7 @@ import asyncpg
 import os
 from typing import Optional
 
-# load_dotenv()  # <-- Закомментируем или удалим эту строку
+# load_dotenv()  # <-- УБРАТЬ
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -11,8 +11,6 @@ if not DATABASE_URL:
     raise ValueError("Требуется переменная окружения DATABASE_URL")
 
 print(f"DEBUG: DATABASE_URL = {DATABASE_URL}")  # <-- Отладочное сообщение
-
-# ... остальной код без изменений
 
 async def init_db():
     print("Инициализация БД...")
@@ -26,7 +24,7 @@ async def init_db():
     ''')
     await conn.execute('''
         CREATE TABLE IF NOT EXISTS alerts (
-            id SERIAL PRIMARY KEY,
+            id SERIAL KEY,
             user_id BIGINT NOT NULL,
             from_currency TEXT NOT NULL,
             to_currency TEXT NOT NULL,
