@@ -135,7 +135,9 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await add_alert(user_id, from_curr, to_curr, threshold, direction)
     await update.message.reply_text(f"Уведомление установлено: {from_curr}/{to_curr} {'>' if direction == 'above' else '<'} {threshold}")
 
-def main() -> None:
+async def run_bot():
+    await init_db()  # Инициализация БД в том же цикле
+
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -150,13 +152,9 @@ def main() -> None:
     # application.job_queue.run_repeating(check_alerts, interval=600, first=10)
 
     # Запуск бота
-    application.run_polling()
+    await application.run_polling()
 
 if __name__ == '__main__':
     import asyncio
 
-    # Инициализируем БД до запуска бота
-    asyncio.run(init_db())
-
-    # Запускаем бота (это блокирует выполнение)
-    main()
+    asyncio.run(run_bot())  # Запускаем всё в одном цикле
