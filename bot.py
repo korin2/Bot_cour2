@@ -3,11 +3,11 @@ import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, get_all_alerts
-from dotenv import load_dotenv
-from typing import Optional  # <-- Вот это добавить
+# from dotenv import load_dotenv  # <-- УБРАТЬ
 import os
+from typing import Optional  # <-- Добавлено
 
-load_dotenv()
+# load_dotenv()  # <-- УБРАТЬ
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -19,7 +19,7 @@ TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
 
-def get_exchange_rate(from_currency: str, to_currency: str) -> Optional[float]:  # <-- Теперь Optional известен
+def get_exchange_rate(from_currency: str, to_currency: str) -> Optional[float]:
     url = f"https://api.exchangerate-api.com/v4/latest/{from_currency.upper()}"
     try:
         response = requests.get(url)
