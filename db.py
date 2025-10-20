@@ -24,7 +24,7 @@ async def init_db():
     ''')
     await conn.execute('''
         CREATE TABLE IF NOT EXISTS alerts (
-            id SERIAL KEY,
+            id SERIAL PRIMARY KEY,  -- <-- Исправлено
             user_id BIGINT NOT NULL,
             from_currency TEXT NOT NULL,
             to_currency TEXT NOT NULL,
