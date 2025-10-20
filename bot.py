@@ -150,7 +150,7 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Ошибка отправки уведомления пользователю {alert['user_id']}: {e}")
 
 def main() -> None:
-    application = Application.builder().token(TOKEN).job_queue().build()  # <-- Без аргументов
+    application = Application.builder().token(TOKEN).build()  # <-- Убрали .job_queue()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
@@ -160,8 +160,8 @@ def main() -> None:
     application.add_handler(CommandHandler("setbase", setbase_command))
     application.add_handler(CommandHandler("alert", alert_command))
 
-    # Добавляем задачу проверки уведомлений (раз в 10 минут)
-    application.job_queue.run_repeating(check_alerts, interval=600, first=10)
+    # Закомментируем задачу
+    # application.job_queue.run_repeating(check_alerts, interval=600, first=10)
 
     application.run_polling()
 
