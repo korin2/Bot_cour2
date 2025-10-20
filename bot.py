@@ -2,7 +2,7 @@ import logging
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-from telegram.ext import JobQueue  # <-- Добавили импорт
+# from telegram.ext import JobQueue  # <-- Больше не нужно
 from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, get_all_alerts
 # from dotenv import load_dotenv  # <-- УБРАТЬ
 import os
@@ -150,15 +150,13 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления пользователю {alert['user_id']}: {e}")
 
-# Задача для инициализации БД/
+# Задача для инициализации БД
 async def init_db_job(context: ContextTypes.DEFAULT_TYPE):
     await init_db()
 
 def main() -> None:
-    # Создаём JobQueue вручную
-    job_queue = JobQueue()
-    # Передаём её в Application.builder()
-    application = Application.builder().token(TOKEN).job_queue(job_queue).build()
+    # Создаём Application с JobQueue (теперь .job_queue() без аргументов)
+    application = Application.builder().token(TOKEN).job_queue().build()
 
     # Добавляем задачу инициализации БД, которая выполнится один раз
     application.job_queue.run_once(init_db_job, when=0.1)
