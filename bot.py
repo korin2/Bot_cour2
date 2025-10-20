@@ -150,7 +150,7 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Ошибка отправки уведомления пользователю {alert['user_id']}: {e}")
 
 def main() -> None:
-    application = Application.builder().token(TOKEN).job_queue().build()  # <-- Добавлен .job_queue()
+    application = Application.builder().token(TOKEN).job_queue().build()  # <-- Без аргументов
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
