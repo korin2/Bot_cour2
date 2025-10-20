@@ -1,7 +1,8 @@
 import logging
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, JobQueue
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import JobQueue  # <-- Добавили импорт
 from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, get_all_alerts
 # from dotenv import load_dotenv  # <-- УБРАТЬ
 import os
@@ -143,7 +144,7 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
         if rate is None:
             continue
         if (alert['direction'] == 'above' and rate > alert['threshold']) or \
-           (alert['direction'] == 'below' and rate < alert['threshold']):
+           (alert['direction'] == 'below' и rate < alert['threshold']):
             try:
                 await context.bot.send_message(chat_id=alert['user_id'], text=f"🔔 Уведомление: {alert['from_currency']}/{alert['to_currency']} = {rate:.4f}")
             except Exception as e:
@@ -154,8 +155,10 @@ async def init_db_job(context: ContextTypes.DEFAULT_TYPE):
     await init_db()
 
 def main() -> None:
-    # Создаём Application с JobQueue
-    application = Application.builder().token(TOKEN).job_queue().build()
+    # Создаём JobQueue вручную
+    job_queue = JobQueue()
+    # Передаём её в Application.builder()
+    application = Application.builder().token(TOKEN).job_queue(job_queue).build()
 
     # Добавляем задачу инициализации БД, которая выполнится один раз
     application.job_queue.run_once(init_db_job, when=0.1)
