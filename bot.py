@@ -1,10 +1,9 @@
 import logging
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
-from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, get_all_alerts, update_user_info
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, update_user_info
 import os
-import asyncio
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -48,29 +47,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Проверяем, является ли update сообщением или callback query
-    if update.message:
-        await update.message.reply_text(
-            f'{greeting} Я бот для отслеживания курсов валют!\n\n'
-            'Выберите валюту или воспользуйтесь командами:\n'
-            '/rates — курсы к вашей базовой валюте\n'
-            '/rate <из> <в> — например, /rate EUR RUB\n'
-            '/convert <сумма> <из> <в> — например, /convert 100 USD RUB\n'
-            '/setbase <валюта> — установить базовую валюту\n'
-            '/stop — остановить бота',
-            reply_markup=reply_markup
-        )
-    elif update.callback_query:
-        await update.callback_query.edit_message_text(
-            f'{greeting} Я бот для отслеживания курсов валют!\n\n'
-            'Выберите валюту или воспользуйтесь командами:\n'
-            '/rates — курсы к вашей базовой валюте\n'
-            '/rate <из> <в> — например, /rate EUR RUB\n'
-            '/convert <сумма> <из> <в> — например, /convert 100 USD RUB\n'
-            '/setbase <валюта> — установить базовую валюту\n'
-            '/stop — остановить бота',
-            reply_markup=reply_markup
-        )
+    await update.message.reply_text(
+        f'{greeting} Я бот для отслеживания курсов валют!\n\n'
+        'Выберите валюту или воспользуйтесь командами:\n'
+        '/rates — курсы к вашей базовой валюте\n'
+        '/rate <из> <в> — например, /rate EUR RUB\n'
+        '/convert <сумма> <из> <в> — например, /convert 100 USD RUB\n'
+        '/setbase <валюта> — установить базовую валюту\n'
+        '/stop — остановить бота',
+        reply_markup=reply_markup
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_help(update, context)
@@ -121,9 +107,6 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"До свидания{greeting} Бот остановлен.\n"
         "Для возобновления работы отправьте /start"
     )
-    
-    # Останавливаем бота
-    await context.application.stop()
 
 async def rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -213,7 +196,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if data == 'help':
         await show_help(update, context)
     elif data == 'back_to_main':
-        await start(update, context)
+        user = query.from_user
+        
+        # Создаем персонализированное приветствие
+        if user.first_name:
+            greeting = f"Привет, {user.first_name}!"
+        else:
+            greeting = "Привет!"
+        
+        keyboard = [
+            [InlineKeyboardButton("Евро (EUR)", callback_data='rate_EUR')],
+            [InlineKeyboardButton("Фунт (GBP)", callback_data='rate_GBP')],
+            [InlineKeyboardButton("Рубль (RUB)", callback_data='rate_RUB')],
+            [InlineKeyboardButton("Помощь", callback_data='help')],
+            [InlineKeyboardButton("Настройки", callback_data='settings')],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f'{greeting} Я бот для отслеживания курсов валют!\n\n'
+            'Выберите валюту или воспользуйтесь командами:\n'
+            '/rates — курсы к вашей базовой валюте\n'
+            '/rate <из> <в> — например, /rate EUR RUB\n'
+            '/convert <сумма> <из> <в> — например, /convert 100 USD RUB\n'
+            '/setbase <валюта> — установить базовую валюту\n'
+            '/stop — остановить бота',
+            reply_markup=reply_markup
+        )
     elif data == 'settings':
         user_id = query.from_user.id
         base_currency = await get_user_base_currency(user_id)
@@ -250,9 +259,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 reply_markup=reply_markup
             )
 
+async def post_init(application: Application) -> None:
+    """Функция, выполняемая после инициализации бота"""
+    await init_db()
+    print("БД инициализирована успешно")
+
 def main() -> None:
     # Создаем и настраиваем application
-    application = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).post_init(post_init).build()
 
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
@@ -266,25 +280,15 @@ def main() -> None:
     
     # Обработчик для inline-кнопок
     application.add_handler(CallbackQueryHandler(button_handler))
-
-    # Инициализируем БД и запускаем бота
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     
-    try:
-        # Инициализация БД
-        loop.run_until_complete(init_db())
-        print("БД инициализирована успешно")
-        
-        # Запуск бота
-        print("Бот запускается...")
-        application.run_polling()
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен пользователем")
-    except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
-    finally:
-        loop.close()
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Неизвестная команда. Используйте /help для просмотра доступных команд.")
+
+# В функцию main добавьте:
+application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+    # Запуск бота
+    print("Бот запускается...")
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
