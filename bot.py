@@ -5,8 +5,6 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, get_all_alerts, update_user_info
 import os
 import asyncio
-import signal
-import sys
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -17,9 +15,6 @@ logger = logging.getLogger(__name__)
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
-
-# Глобальная переменная для управления состоянием бота
-bot_running = True
 
 def get_exchange_rate(from_currency: str, to_currency: str) -> float | None:
     url = f"https://api.exchangerate-api.com/v4/latest/{from_currency.upper()}"
@@ -111,8 +106,6 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
     
     # Останавливаем бота
-    global bot_running
-    bot_running = False
     await context.application.stop()
 
 async def rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -213,6 +206,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         else:
             await query.edit_message_text("Не удалось получить курс. Попробуйте позже.")
+    elif data == 'settings':
+        user_id = query.from_user.id
+        base_currency = await get_user_base_currency(user_id)
+        await query.edit_message_text(
+            f"Текущие настройки:\n"
+            f"• Базовая валюта: {base_currency}\n\n"
+            "Используйте /setbase <валюта> для изменения базовой валюты."
+        )
 
 def main() -> None:
     # Создаем и настраиваем application
@@ -238,10 +239,15 @@ def main() -> None:
     try:
         # Инициализация БД
         loop.run_until_complete(init_db())
+        print("БД инициализирована успешно")
+        
         # Запуск бота
+        print("Бот запускается...")
         application.run_polling()
     except KeyboardInterrupt:
         logger.info("Бот остановлен пользователем")
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
     finally:
         loop.close()
 
