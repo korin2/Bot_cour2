@@ -29,6 +29,13 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float | None:
         return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    # Создаем персонализированное приветствие
+    if user.first_name:
+        greeting = f"Привет, {user.first_name}!"
+    else:
+        greeting = "Привет!"
+    
     keyboard = [
         [InlineKeyboardButton("Евро (EUR)", callback_data='rate_EUR')],
         [InlineKeyboardButton("Фунт (GBP)", callback_data='rate_GBP')],
@@ -36,8 +43,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         [InlineKeyboardButton("Настройки", callback_data='settings')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await update.message.reply_text(
-        'Привет! Выберите валюту или воспользуйтесь командами:\n'
+        f'{greeting} Выберите валюту или воспользуйтесь командами:\n'
         '/rates — курсы к вашей базовой валюте\n'
         '/rate <из> <в> — например, /rate EUR RUB\n'
         '/convert <сумма> <из> <в> — например, /convert 100 USD RUB\n'
@@ -46,8 +54,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    greeting = f", {user.first_name}!" if user.first_name else "!"
+    
     await update.message.reply_text(
-        'Доступные команды:\n'
+        f'Привет{greeting} Доступные команды:\n'
         '/start — главное меню\n'
         '/help — это сообщение\n'
         '/rates — курсы к вашей базовой валюте\n'
@@ -58,20 +69,24 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 async def rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_message.from_user.id
+    user = update.effective_user
+    user_id = user.id
     base_currency = await get_user_base_currency(user_id)
+    
+    greeting = f", {user.first_name}!" if user.first_name else "!"
+    
     url = f"https://api.exchangerate-api.com/v4/latest/{base_currency}"
     try:
         response = requests.get(url)
         response.raise_for_status()
         data = response.json()
         rates = data['rates']
-        message = f"Курсы относительно {base_currency}:\n"
+        message = f"Привет{greeting} Курсы относительно {base_currency}:\n"
         for curr, rate in list(rates.items())[:5]:  # первые 5
             message += f"{curr}: {rate:.4f}\n"
         await update.message.reply_text(message)
     except Exception as e:
-        await update.message.reply_text("Не удалось получить курсы валют.")
+        await update.message.reply_text(f"Привет{greeting} Не удалось получить курсы валют.")
 
 async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
