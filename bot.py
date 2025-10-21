@@ -4,6 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, update_user_info
 import os
+from datetime import datetime
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -15,7 +16,7 @@ TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
 
-def get_exchange_rate(from_currency: str, to_currency: str) -> float | None:
+def get_exchange_rate(from_currency: str, to_currency: str) -> tuple[float | None, str]:
     """Получает курс обмена валют с использованием нескольких API"""
     apis = [
         f"https://api.exchangerate.host/latest?base={from_currency.upper()}",
@@ -28,6 +29,23 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float | None:
             response.raise_for_status()
             data = response.json()
             
+            # Получаем дату
+            date = 'неизвестная дата'
+            if 'date' in data:
+                date = data['date']
+                # Форматируем дату
+                try:
+                    date_parts = date.split('-')
+                    if len(date_parts) == 3:
+                        date = f"{date_parts[2]}.{date_parts[1]}.{date_parts[0]}"
+                except:
+                    pass
+            elif 'time_last_updated' in data:
+                try:
+                    date = datetime.fromtimestamp(data['time_last_updated']).strftime('%d.%m.%Y')
+                except:
+                    pass
+            
             # Проверяем структуру ответа для разных API
             if 'rates' in data:
                 rate = data['rates'].get(to_currency.upper())
@@ -38,13 +56,13 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> float | None:
                 
             if rate is not None:
                 logger.info(f"Курс {from_currency}/{to_currency} = {rate} получен с {url}")
-                return rate
+                return rate, date
         except Exception as e:
             logger.warning(f"Ошибка при получении курса с {url}: {e}")
             continue
     
     logger.error(f"Не удалось получить курс {from_currency}/{to_currency} ни с одного API")
-    return None
+    return None, 'неизвестная дата'
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -147,11 +165,22 @@ async def rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             raise ValueError("API вернуло неуспешный статус")
             
         rates_data = data['rates']
+        date = data.get('date', 'неизвестная дата')
+        
+        # Форматируем дату в понятный вид (если она в формате YYYY-MM-DD)
+        if date != 'неизвестная дата':
+            try:
+                # Преобразуем из YYYY-MM-DD в DD.MM.YYYY
+                date_parts = date.split('-')
+                if len(date_parts) == 3:
+                    date = f"{date_parts[2]}.{date_parts[1]}.{date_parts[0]}"
+            except:
+                pass  # Оставляем дату как есть, если не удалось преобразовать
         
         # Популярные валюты для отображения
         popular_currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'RUB', 'CHF', 'CAD', 'AUD']
         
-        message = f"Привет{greeting} Курсы относительно {base_currency}:\n\n"
+        message = f"Привет{greeting} Курсы валют на {date} относительно {base_currency}:\n\n"
         for curr in popular_currencies:
             if curr != base_currency and curr in rates_data:
                 rate = rates_data[curr]
@@ -173,7 +202,16 @@ async def rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             data = response.json()
             rates_data = data['rates']
             
-            message = f"Привет{greeting} Курсы относительно {base_currency}:\n\n"
+            # Пытаемся получить дату из альтернативного API
+            date = data.get('time_last_updated', 'неизвестная дата')
+            if date != 'неизвестная дата':
+                # Преобразуем timestamp в читаемую дату
+                try:
+                    date = datetime.fromtimestamp(date).strftime('%d.%m.%Y')
+                except:
+                    pass
+            
+            message = f"Привет{greeting} Курсы валют на {date} относительно {base_currency}:\n\n"
             for curr in ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'RUB']:
                 if curr != base_currency and curr in rates_data:
                     rate = rates_data[curr]
@@ -194,9 +232,9 @@ async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Используйте: /rate <из> <в>")
         return
     from_curr, to_curr = args
-    rate = get_exchange_rate(from_curr, to_curr)
+    rate, date = get_exchange_rate(from_curr, to_curr)
     if rate is not None:
-        await update.message.reply_text(f"1 {from_curr.upper()} = {rate:.4f} {to_curr.upper()}")
+        await update.message.reply_text(f"Курс на {date}:\n1 {from_curr.upper()} = {rate:.4f} {to_curr.upper()}")
     else:
         await update.message.reply_text("Не удалось получить курс.")
 
@@ -211,10 +249,10 @@ async def convert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Сумма должна быть числом.")
         return
     from_curr, to_curr = args[1], args[2]
-    rate = get_exchange_rate(from_curr, to_curr)
+    rate, date = get_exchange_rate(from_curr, to_curr)
     if rate is not None:
         result = amount * rate
-        await update.message.reply_text(f"{amount} {from_curr.upper()} = {result:.4f} {to_curr.upper()}")
+        await update.message.reply_text(f"Курс на {date}:\n{amount} {from_curr.upper()} = {result:.4f} {to_curr.upper()}")
     else:
         await update.message.reply_text("Не удалось выполнить конвертацию.")
 
@@ -301,7 +339,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         currency = data.split('_')[1]
         user_id = query.from_user.id
         base_currency = await get_user_base_currency(user_id)
-        rate = get_exchange_rate(base_currency, currency)
+        rate, date = get_exchange_rate(base_currency, currency)
         
         # Клавиатура с кнопкой "Назад"
         keyboard = [[InlineKeyboardButton("Назад", callback_data='back_to_main')]]
@@ -309,7 +347,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         if rate is not None:
             await query.edit_message_text(
-                f"1 {base_currency} = {rate:.4f} {currency}\n\n"
+                f"Курс на {date}:\n1 {base_currency} = {rate:.4f} {currency}\n\n"
                 "Используйте /rates для просмотра всех курсов или /convert для конвертации сумм.",
                 reply_markup=reply_markup
             )
