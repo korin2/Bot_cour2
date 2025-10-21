@@ -16,16 +16,35 @@ if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
 
 def get_exchange_rate(from_currency: str, to_currency: str) -> float | None:
-    url = f"https://api.exchangerate-api.com/v4/latest/{from_currency.upper()}"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        rate = data['rates'].get(to_currency.upper())
-        return rate
-    except Exception as e:
-        logger.error(f"Ошибка при получении курса {from_currency}/{to_currency}: {e}")
-        return None
+    """Получает курс обмена валют с использованием нескольких API"""
+    apis = [
+        f"https://api.exchangerate.host/latest?base={from_currency.upper()}",
+        f"https://api.exchangerate-api.com/v4/latest/{from_currency.upper()}",
+    ]
+    
+    for url in apis:
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Проверяем структуру ответа для разных API
+            if 'rates' in data:
+                rate = data['rates'].get(to_currency.upper())
+            elif 'result' in data and data['result'] == 'success' and 'rates' in data:
+                rate = data['rates'].get(to_currency.upper())
+            else:
+                continue
+                
+            if rate is not None:
+                logger.info(f"Курс {from_currency}/{to_currency} = {rate} получен с {url}")
+                return rate
+        except Exception as e:
+            logger.warning(f"Ошибка при получении курса с {url}: {e}")
+            continue
+    
+    logger.error(f"Не удалось получить курс {from_currency}/{to_currency} ни с одного API")
+    return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -115,18 +134,59 @@ async def rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     greeting = f", {user.first_name}!" if user.first_name else "!"
     
-    url = f"https://api.exchangerate-api.com/v4/latest/{base_currency}"
+    # Используем более надежное API для получения курсов
+    url = f"https://api.exchangerate.host/latest?base={base_currency}"
+    
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
-        rates = data['rates']
-        message = f"Привет{greeting} Курсы относительно {base_currency}:\n"
-        for curr, rate in list(rates.items())[:5]:  # первые 5
-            message += f"{curr}: {rate:.4f}\n"
+        
+        # Проверяем успешность запроса
+        if data.get('success') is not True:
+            raise ValueError("API вернуло неуспешный статус")
+            
+        rates_data = data['rates']
+        
+        # Популярные валюты для отображения
+        popular_currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'RUB', 'CHF', 'CAD', 'AUD']
+        
+        message = f"Привет{greeting} Курсы относительно {base_currency}:\n\n"
+        for curr in popular_currencies:
+            if curr != base_currency and curr in rates_data:
+                rate = rates_data[curr]
+                message += f"{curr}: {rate:.4f}\n"
+        
+        # Если базовая валюта не USD, добавляем USD
+        if base_currency != 'USD' and 'USD' in rates_data:
+            message += f"\nUSD: {rates_data['USD']:.4f}"
+            
         await update.message.reply_text(message)
+        
     except Exception as e:
-        await update.message.reply_text(f"Привет{greeting} Не удалось получить курсы валют.")
+        logger.error(f"Ошибка при получении курсов валют: {e}")
+        # Пробуем альтернативное API
+        try:
+            url_fallback = f"https://api.exchangerate-api.com/v4/latest/{base_currency}"
+            response = requests.get(url_fallback, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            rates_data = data['rates']
+            
+            message = f"Привет{greeting} Курсы относительно {base_currency}:\n\n"
+            for curr in ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'RUB']:
+                if curr != base_currency and curr in rates_data:
+                    rate = rates_data[curr]
+                    message += f"{curr}: {rate:.4f}\n"
+                    
+            await update.message.reply_text(message)
+            
+        except Exception as e2:
+            logger.error(f"Ошибка при получении курсов с резервного API: {e2}")
+            await update.message.reply_text(
+                f"Привет{greeting} К сожалению, не удалось получить актуальные курсы валют. "
+                "Пожалуйста, попробуйте позже или используйте команду /rate для получения конкретного курса."
+            )
 
 async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
@@ -259,13 +319,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 reply_markup=reply_markup
             )
 
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Неизвестная команда. Используйте /help для просмотра доступных команд.")
+
 async def post_init(application: Application) -> None:
     """Функция, выполняемая после инициализации бота"""
     await init_db()
     print("БД инициализирована успешно")
-
-async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Неизвестная команда. Используйте /help для просмотра доступных команд.")
 
 def main() -> None:
     # Создаем и настраиваем application
