@@ -1,7 +1,7 @@
 import logging
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, update_user_info
 import os
 
@@ -264,6 +264,9 @@ async def post_init(application: Application) -> None:
     await init_db()
     print("БД инициализирована успешно")
 
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Неизвестная команда. Используйте /help для просмотра доступных команд.")
+
 def main() -> None:
     # Создаем и настраиваем application
     application = Application.builder().token(TOKEN).post_init(post_init).build()
@@ -281,6 +284,8 @@ def main() -> None:
     # Обработчик для inline-кнопок
     application.add_handler(CallbackQueryHandler(button_handler))
     
+    # Обработчик для неизвестных команд
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
     # Запуск бота
     print("Бот запускается...")
