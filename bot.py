@@ -48,16 +48,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        f'{greeting} Я бот для отслеживания курсов валют!\n\n'
-        'Выберите валюту или воспользуйтесь командами:\n'
-        '/rates — курсы к вашей базовой валюте\n'
-        '/rate <из> <в> — например, /rate EUR RUB\n'
-        '/convert <сумма> <из> <в> — например, /convert 100 USD RUB\n'
-        '/setbase <валюта> — установить базовую валюту\n'
-        '/stop — остановить бота',
-        reply_markup=reply_markup
-    )
+    # Проверяем, является ли update сообщением или callback query
+    if update.message:
+        await update.message.reply_text(
+            f'{greeting} Я бот для отслеживания курсов валют!\n\n'
+            'Выберите валюту или воспользуйтесь командами:\n'
+            '/rates — курсы к вашей базовой валюте\n'
+            '/rate <из> <в> — например, /rate EUR RUB\n'
+            '/convert <сумма> <из> <в> — например, /convert 100 USD RUB\n'
+            '/setbase <валюта> — установить базовую валюту\n'
+            '/stop — остановить бота',
+            reply_markup=reply_markup
+        )
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(
+            f'{greeting} Я бот для отслеживания курсов валют!\n\n'
+            'Выберите валюту или воспользуйтесь командами:\n'
+            '/rates — курсы к вашей базовой валюте\n'
+            '/rate <из> <в> — например, /rate EUR RUB\n'
+            '/convert <сумма> <из> <в> — например, /convert 100 USD RUB\n'
+            '/setbase <валюта> — установить базовую валюту\n'
+            '/stop — остановить бота',
+            reply_markup=reply_markup
+        )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_help(update, context)
@@ -91,10 +104,14 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "USD, EUR, GBP, RUB, JPY, CNY, CHF и многие другие!"
     )
     
+    # Клавиатура с кнопкой "Назад"
+    keyboard = [[InlineKeyboardButton("Назад", callback_data='back_to_main')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     if update.callback_query:
-        await update.callback_query.message.edit_text(help_text, parse_mode='HTML')
+        await update.callback_query.edit_message_text(help_text, parse_mode='HTML', reply_markup=reply_markup)
     else:
-        await update.message.reply_text(help_text, parse_mode='HTML')
+        await update.message.reply_text(help_text, parse_mode='HTML', reply_markup=reply_markup)
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -192,28 +209,46 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
     
     data = query.data
+    
     if data == 'help':
         await show_help(update, context)
+    elif data == 'back_to_main':
+        await start(update, context)
+    elif data == 'settings':
+        user_id = query.from_user.id
+        base_currency = await get_user_base_currency(user_id)
+        
+        # Клавиатура с кнопкой "Назад"
+        keyboard = [[InlineKeyboardButton("Назад", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"Текущие настройки:\n"
+            f"• Базовая валюта: {base_currency}\n\n"
+            "Используйте /setbase <валюта> для изменения базовой валюты.",
+            reply_markup=reply_markup
+        )
     elif data.startswith('rate_'):
         currency = data.split('_')[1]
         user_id = query.from_user.id
         base_currency = await get_user_base_currency(user_id)
         rate = get_exchange_rate(base_currency, currency)
+        
+        # Клавиатура с кнопкой "Назад"
+        keyboard = [[InlineKeyboardButton("Назад", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         if rate is not None:
             await query.edit_message_text(
                 f"1 {base_currency} = {rate:.4f} {currency}\n\n"
-                "Используйте /rates для просмотра всех курсов или /convert для конвертации сумм."
+                "Используйте /rates для просмотра всех курсов или /convert для конвертации сумм.",
+                reply_markup=reply_markup
             )
         else:
-            await query.edit_message_text("Не удалось получить курс. Попробуйте позже.")
-    elif data == 'settings':
-        user_id = query.from_user.id
-        base_currency = await get_user_base_currency(user_id)
-        await query.edit_message_text(
-            f"Текущие настройки:\n"
-            f"• Базовая валюта: {base_currency}\n\n"
-            "Используйте /setbase <валюта> для изменения базовой валюты."
-        )
+            await query.edit_message_text(
+                "Не удалось получить курс. Попробуйте позже.",
+                reply_markup=reply_markup
+            )
 
 def main() -> None:
     # Создаем и настраиваем application
