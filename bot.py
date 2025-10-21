@@ -281,11 +281,7 @@ def main() -> None:
     # Обработчик для inline-кнопок
     application.add_handler(CallbackQueryHandler(button_handler))
     
-async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("Неизвестная команда. Используйте /help для просмотра доступных команд.")
 
-# В функцию main добавьте:
-application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
     # Запуск бота
     print("Бот запускается...")
     application.run_polling()
