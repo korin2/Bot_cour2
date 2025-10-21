@@ -4,6 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, get_all_alerts
 import os
+import asyncio
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -132,12 +133,10 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(f"Уведомление установлено: {from_curr}/{to_curr} {'>' if direction == 'above' else '<'} {threshold}")
 
 def main() -> None:
-    # Инициализация БД в синхронном стиле
-    import asyncio
-    asyncio.run(init_db())
-
+    # Создаем и настраиваем application
     application = Application.builder().token(TOKEN).build()
 
+    # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("rates", rates))
@@ -146,8 +145,17 @@ def main() -> None:
     application.add_handler(CommandHandler("setbase", setbase_command))
     application.add_handler(CommandHandler("alert", alert_command))
 
-    # Запуск бота в синхронном стиле
-    application.run_polling()
+    # Инициализируем БД и запускаем бота
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        # Инициализация БД
+        loop.run_until_complete(init_db())
+        # Запуск бота
+        application.run_polling()
+    finally:
+        loop.close()
 
 if __name__ == '__main__':
     main()
