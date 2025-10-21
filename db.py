@@ -1,19 +1,12 @@
 import asyncpg
 import os
-from typing import Optional
-
-# load_dotenv()  # <-- УБРАТЬ
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 if not DATABASE_URL:
-    print("DEBUG: DATABASE_URL не найдена в переменных окружения")
     raise ValueError("Требуется переменная окружения DATABASE_URL")
 
-print(f"DEBUG: DATABASE_URL = {DATABASE_URL}")  # <-- Отладочное сообщение
-
 async def init_db():
-    print("Инициализация БД...")
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -24,7 +17,7 @@ async def init_db():
     ''')
     await conn.execute('''
         CREATE TABLE IF NOT EXISTS alerts (
-            id SERIAL PRIMARY KEY,  -- <-- Исправлено
+            id SERIAL PRIMARY KEY,
             user_id BIGINT NOT NULL,
             from_currency TEXT NOT NULL,
             to_currency TEXT NOT NULL,
@@ -34,7 +27,6 @@ async def init_db():
         );
     ''')
     await conn.close()
-    print("БД инициализирована.")
 
 async def get_user_base_currency(user_id: int) -> str:
     conn = await asyncpg.connect(DATABASE_URL)
