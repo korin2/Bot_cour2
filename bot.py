@@ -3,11 +3,7 @@ import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from db import init_db, get_user_base_currency, set_user_base_currency, add_alert, get_all_alerts
-# from dotenv import load_dotenv  # <-- УБРАТЬ
 import os
-from typing import Optional  # <-- Добавлено
-
-# load_dotenv()  # <-- УБРАТЬ
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -19,7 +15,7 @@ TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
 
-def get_exchange_rate(from_currency: str, to_currency: str) -> Optional[float]:
+def get_exchange_rate(from_currency: str, to_currency: str) -> float | None:
     url = f"https://api.exchangerate-api.com/v4/latest/{from_currency.upper()}"
     try:
         response = requests.get(url)
@@ -135,8 +131,10 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await add_alert(user_id, from_curr, to_curr, threshold, direction)
     await update.message.reply_text(f"Уведомление установлено: {from_curr}/{to_curr} {'>' if direction == 'above' else '<'} {threshold}")
 
-async def run_bot():
-    await init_db()  # Инициализация БД в том же цикле
+def main() -> None:
+    # Инициализация БД в синхронном стиле
+    import asyncio
+    asyncio.run(init_db())
 
     application = Application.builder().token(TOKEN).build()
 
@@ -148,13 +146,8 @@ async def run_bot():
     application.add_handler(CommandHandler("setbase", setbase_command))
     application.add_handler(CommandHandler("alert", alert_command))
 
-    # Убираем задачу, если JobQueue не работает
-    # application.job_queue.run_repeating(check_alerts, interval=600, first=10)
-
-    # Запуск бота
-    await application.run_polling()
+    # Запуск бота в синхронном стиле
+    application.run_polling()
 
 if __name__ == '__main__':
-    import asyncio
-
-    asyncio.run(run_bot())  # Запускаем всё в одном цикле
+    main()
