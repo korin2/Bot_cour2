@@ -17,49 +17,62 @@ if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
 
 def get_exchange_rate(from_currency: str, to_currency: str) -> tuple[float | None, str]:
-    """Получает курс обмена валют с использованием нескольких API"""
-    apis = [
-        f"https://api.exchangerate.host/latest?base={from_currency.upper()}",
-        f"https://api.exchangerate-api.com/v4/latest/{from_currency.upper()}",
-    ]
+    """Получает курс обмена валют с использованием надежного API"""
+    # Основное API - Frankfurter (бесплатное и надежное)
+    url = f"https://api.frankfurter.app/latest?from={from_currency.upper()}&to={to_currency.upper()}"
     
-    for url in apis:
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Получаем дату
+        date = data.get('date', 'неизвестная дата')
+        
+        # Форматируем дату в понятный вид
+        if date != 'неизвестная дата':
+            try:
+                # Преобразуем из YYYY-MM-DD в DD.MM.YYYY
+                date_parts = date.split('-')
+                if len(date_parts) == 3:
+                    date = f"{date_parts[2]}.{date_parts[1]}.{date_parts[0]}"
+            except:
+                pass
+        
+        # Получаем курс
+        rate = data['rates'].get(to_currency.upper())
+        
+        if rate is not None:
+            logger.info(f"Курс {from_currency}/{to_currency} = {rate} получен с Frankfurter API")
+            return rate, date
             
-            # Получаем дату
-            date = 'неизвестная дата'
-            if 'date' in data:
-                date = data['date']
-                # Форматируем дату
-                try:
-                    date_parts = date.split('-')
-                    if len(date_parts) == 3:
-                        date = f"{date_parts[2]}.{date_parts[1]}.{date_parts[0]}"
-                except:
-                    pass
-            elif 'time_last_updated' in data:
-                try:
-                    date = datetime.fromtimestamp(data['time_last_updated']).strftime('%d.%m.%Y')
-                except:
-                    pass
+    except Exception as e:
+        logger.warning(f"Ошибка при получении курса с Frankfurter API: {e}")
+    
+    # Резервное API - ExchangeRate-API
+    try:
+        url_fallback = f"https://api.exchangerate-api.com/v4/latest/{from_currency.upper()}"
+        response = requests.get(url_fallback, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Получаем дату
+        date = data.get('time_last_updated', 'неизвестная дата')
+        if date != 'неизвестная дата':
+            try:
+                date = datetime.fromtimestamp(date).strftime('%d.%m.%Y')
+            except:
+                pass
+        
+        # Получаем курс
+        rate = data['rates'].get(to_currency.upper())
+        
+        if rate is not None:
+            logger.info(f"Курс {from_currency}/{to_currency} = {rate} получен с резервного API")
+            return rate, date
             
-            # Проверяем структуру ответа для разных API
-            if 'rates' in data:
-                rate = data['rates'].get(to_currency.upper())
-            elif 'result' in data and data['result'] == 'success' and 'rates' in data:
-                rate = data['rates'].get(to_currency.upper())
-            else:
-                continue
-                
-            if rate is not None:
-                logger.info(f"Курс {from_currency}/{to_currency} = {rate} получен с {url}")
-                return rate, date
-        except Exception as e:
-            logger.warning(f"Ошибка при получении курса с {url}: {e}")
-            continue
+    except Exception as e:
+        logger.warning(f"Ошибка при получении курса с резервного API: {e}")
     
     logger.error(f"Не удалось получить курс {from_currency}/{to_currency} ни с одного API")
     return None, 'неизвестная дата'
@@ -152,43 +165,39 @@ async def rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     greeting = f", {user.first_name}!" if user.first_name else "!"
     
-    # Используем более надежное API для получения курсов
-    url = f"https://api.exchangerate.host/latest?base={base_currency}"
+    # Используем Frankfurter API для получения курсов
+    # Получаем курсы для популярных валют относительно базовой
+    popular_currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'RUB', 'CHF', 'CAD', 'AUD']
+    target_currencies = [curr for curr in popular_currencies if curr != base_currency]
+    
+    if not target_currencies:
+        await update.message.reply_text(f"Привет{greeting} Базовая валюта {base_currency} совпадает со всеми популярными валютами.")
+        return
+    
+    # Формируем запрос к API
+    symbols = ','.join(target_currencies)
+    url = f"https://api.frankfurter.app/latest?from={base_currency}&to={symbols}"
     
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
         
-        # Проверяем успешность запроса
-        if data.get('success') is not True:
-            raise ValueError("API вернуло неуспешный статус")
-            
-        rates_data = data['rates']
+        # Получаем дату
         date = data.get('date', 'неизвестная дата')
-        
-        # Форматируем дату в понятный вид (если она в формате YYYY-MM-DD)
         if date != 'неизвестная дата':
             try:
-                # Преобразуем из YYYY-MM-DD в DD.MM.YYYY
                 date_parts = date.split('-')
                 if len(date_parts) == 3:
                     date = f"{date_parts[2]}.{date_parts[1]}.{date_parts[0]}"
             except:
-                pass  # Оставляем дату как есть, если не удалось преобразовать
+                pass
         
-        # Популярные валюты для отображения
-        popular_currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'RUB', 'CHF', 'CAD', 'AUD']
+        rates_data = data['rates']
         
         message = f"Привет{greeting} Курсы валют на {date} относительно {base_currency}:\n\n"
-        for curr in popular_currencies:
-            if curr != base_currency and curr in rates_data:
-                rate = rates_data[curr]
-                message += f"{curr}: {rate:.4f}\n"
-        
-        # Если базовая валюта не USD, добавляем USD
-        if base_currency != 'USD' and 'USD' in rates_data:
-            message += f"\nUSD: {rates_data['USD']:.4f}"
+        for curr, rate in rates_data.items():
+            message += f"{curr}: {rate:.4f}\n"
             
         await update.message.reply_text(message)
         
@@ -205,7 +214,6 @@ async def rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             # Пытаемся получить дату из альтернативного API
             date = data.get('time_last_updated', 'неизвестная дата')
             if date != 'неизвестная дата':
-                # Преобразуем timestamp в читаемую дату
                 try:
                     date = datetime.fromtimestamp(date).strftime('%d.%m.%Y')
                 except:
