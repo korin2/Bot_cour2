@@ -2,9 +2,10 @@ import logging
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
-from db import init_db, add_alert, update_user_info
+from db import init_db, add_alert, update_user_info, get_all_users
 import os
-from datetime import datetime
+from datetime import datetime, time
+import asyncio
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -71,6 +72,53 @@ def get_cbr_rates() -> tuple[dict, str]:
         logger.error(f"Ошибка при получении курсов ЦБ РФ: {e}")
         return {}, 'неизвестная дата'
 
+def format_cbr_rates_message(rates_data: dict, cbr_date: str) -> str:
+    """Форматирует сообщение с курсами ЦБ РФ"""
+    if not rates_data:
+        return "❌ Не удалось получить курсы ЦБ РФ."
+    
+    message = f"🏛 <b>КУРСЫ ЦБ РФ</b>\n"
+    message += f"📅 <i>на {cbr_date}</i>\n\n"
+    
+    # Основные валюты (доллар, евро)
+    main_currencies = ['USD', 'EUR']
+    for currency in main_currencies:
+        if currency in rates_data:
+            data = rates_data[currency]
+            current_value = data['value']
+            previous_value = data['previous']
+            change = current_value - previous_value
+            change_percent = (change / previous_value) * 100 if previous_value else 0
+            
+            change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+            change_text = f"{change:+.2f} руб. ({change_percent:+.2f}%)"
+            
+            message += f"💵 <b>{data['name']}</b> ({currency}):\n"
+            message += f"   <b>{current_value:.2f} руб.</b> {change_icon} {change_text}\n\n"
+    
+    # Другие валюты
+    other_currencies = [curr for curr in rates_data.keys() if curr not in main_currencies]
+    if other_currencies:
+        message += "🌍 <b>Другие валюты:</b>\n"
+        
+        for currency in other_currencies:
+            data = rates_data[currency]
+            current_value = data['value']
+            previous_value = data['previous']
+            change = current_value - previous_value
+            
+            change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+            
+            # Для JPY делим на 100, так как курс указан за 100 единиц
+            if currency == 'JPY':
+                display_value = current_value / 100
+                message += f"   {data['name']} ({currency}): <b>{display_value:.4f} руб.</b> {change_icon}\n"
+            else:
+                message += f"   {data['name']} ({currency}): <b>{current_value:.4f} руб.</b> {change_icon}\n"
+    
+    message += f"\n💡 <i>Курсы обновляются ежедневно</i>"
+    return message
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         user = update.effective_user
@@ -121,46 +169,7 @@ async def show_cbr_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await update.message.reply_text(error_msg, reply_markup=reply_markup)
             return
         
-        message = f"🏛 <b>КУРСЫ ЦБ РФ</b>\n"
-        message += f"📅 <i>на {cbr_date}</i>\n\n"
-        
-        # Основные валюты (доллар, евро)
-        main_currencies = ['USD', 'EUR']
-        for currency in main_currencies:
-            if currency in rates_data:
-                data = rates_data[currency]
-                current_value = data['value']
-                previous_value = data['previous']
-                change = current_value - previous_value
-                change_percent = (change / previous_value) * 100 if previous_value else 0
-                
-                change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-                change_text = f"{change:+.2f} руб. ({change_percent:+.2f}%)"
-                
-                message += f"💵 <b>{data['name']}</b> ({currency}):\n"
-                message += f"   <b>{current_value:.2f} руб.</b> {change_icon} {change_text}\n\n"
-        
-        # Другие валюты
-        other_currencies = [curr for curr in rates_data.keys() if curr not in main_currencies]
-        if other_currencies:
-            message += "🌍 <b>Другие валюты:</b>\n"
-            
-            for currency in other_currencies:
-                data = rates_data[currency]
-                current_value = data['value']
-                previous_value = data['previous']
-                change = current_value - previous_value
-                
-                change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-                
-                # Для JPY делим на 100, так как курс указан за 100 единиц
-                if currency == 'JPY':
-                    display_value = current_value / 100
-                    message += f"   {data['name']} ({currency}): <b>{display_value:.4f} руб.</b> {change_icon}\n"
-                else:
-                    message += f"   {data['name']} ({currency}): <b>{current_value:.4f} руб.</b> {change_icon}\n"
-        
-        message += f"\n💡 <i>Курсы обновляются ежедневно</i>"
+        message = format_cbr_rates_message(rates_data, cbr_date)
         
         # Клавиатура с кнопкой "Назад"
         keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
@@ -179,6 +188,51 @@ async def show_cbr_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.callback_query.message.reply_text(error_msg, reply_markup=reply_markup)
         else:
             await update.message.reply_text(error_msg, reply_markup=reply_markup)
+
+async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ежедневная отправка курсов ЦБ РФ всем пользователям"""
+    try:
+        logger.info("Начало ежедневной рассылки курсов ЦБ РФ")
+        
+        # Получаем курсы ЦБ РФ
+        rates_data, cbr_date = get_cbr_rates()
+        
+        if not rates_data:
+            logger.error("Не удалось получить курсы ЦБ РФ для ежедневной рассылки")
+            return
+        
+        # Форматируем сообщение
+        message = format_cbr_rates_message(rates_data, cbr_date)
+        message = f"🌅 <b>Ежедневное обновление курсов ЦБ РФ</b>\n\n{message}"
+        
+        # Получаем всех пользователей из базы данных
+        users = await get_all_users()
+        
+        if not users:
+            logger.info("Нет пользователей для рассылки")
+            return
+        
+        logger.info(f"Начинаем рассылку для {len(users)} пользователей")
+        
+        # Отправляем сообщение каждому пользователю
+        success_count = 0
+        for user in users:
+            try:
+                await context.bot.send_message(
+                    chat_id=user['user_id'],
+                    text=message,
+                    parse_mode='HTML'
+                )
+                success_count += 1
+                # Небольшая задержка чтобы не превысить лимиты Telegram
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                logger.warning(f"Не удалось отправить сообщение пользователю {user['user_id']}: {e}")
+        
+        logger.info(f"Ежедневная рассылка завершена. Успешно отправлено: {success_count}/{len(users)}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка в ежедневной рассылке: {e}")
 
 async def cbr_rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды для курсов ЦБ РФ"""
@@ -205,6 +259,9 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             
             "🔔 <b>Уведомления:</b>\n"
             "• <code>/alert USD RUB 80 above</code> - уведомит о курсе\n\n"
+            
+            "⏰ <b>Ежедневная рассылка</b>\n"
+            "• Автоматическая отправка курсов ЦБ РФ каждый день в 10:00\n\n"
             
             "💡 <b>ИНФОРМАЦИЯ</b>\n\n"
             "• Курсы ЦБ РФ обновляются ежедневно\n"
@@ -364,6 +421,19 @@ def main() -> None:
         
         # Обработчик для неизвестных команд
         application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+
+        # Настраиваем ежедневную рассылку в 10:00
+        job_queue = application.job_queue
+        
+        # Время в UTC (10:00 МСК = 07:00 UTC)
+        # Если Railway использует UTC, то устанавливаем 07:00
+        job_queue.run_daily(
+            send_daily_rates,
+            time=time(hour=7, minute=0, second=0),  # 07:00 UTC = 10:00 МСК
+            days=(0, 1, 2, 3, 4, 5, 6)  # Все дни недели
+        )
+        
+        logger.info("Ежедневная рассылка настроена на 10:00 МСК (07:00 UTC)")
 
         # Запуск бота
         logger.info("Бот запускается...")
