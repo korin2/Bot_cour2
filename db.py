@@ -62,6 +62,17 @@ async def add_alert(user_id: int, from_curr: str, to_curr: str, threshold: float
         print(f"Ошибка при добавлении уведомления: {e}")
         raise
 
+async def get_all_users():
+    """Получение всех пользователей"""
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        users = await conn.fetch('SELECT user_id FROM users')
+        await conn.close()
+        return users
+    except Exception as e:
+        print(f"Ошибка при получении пользователей: {e}")
+        return []
+
 async def get_all_alerts():
     """Получение всех уведомлений"""
     try:
