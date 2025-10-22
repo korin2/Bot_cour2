@@ -17,8 +17,8 @@ if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
 
 def get_exchange_rate(from_currency: str, to_currency: str) -> tuple[float | None, str]:
-    """Получает курс обмена валют с использованием надежного API"""
-    # Основное API - Frankfurter (бесплатное и надежное)
+    """Получает курс обмена валют с использованием Frankfurter API"""
+    # Используем только Frankfurter API
     url = f"https://api.frankfurter.app/latest?from={from_currency.upper()}&to={to_currency.upper()}"
     
     try:
@@ -47,35 +47,8 @@ def get_exchange_rate(from_currency: str, to_currency: str) -> tuple[float | Non
             return rate, api_date
             
     except Exception as e:
-        logger.warning(f"Ошибка при получении курса с Frankfurter API: {e}")
-    
-    # Резервное API - ExchangeRate-API
-    try:
-        url_fallback = f"https://api.exchangerate-api.com/v4/latest/{from_currency.upper()}"
-        response = requests.get(url_fallback, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        # Получаем дату
-        api_date = data.get('time_last_updated', 'неизвестная дата')
-        if api_date != 'неизвестная дата':
-            try:
-                api_date = datetime.fromtimestamp(api_date).strftime('%d.%m.%Y')
-            except:
-                pass
-        
-        # Получаем курс
-        rate = data['rates'].get(to_currency.upper())
-        
-        if rate is not None:
-            logger.info(f"Курс {from_currency}/{to_currency} = {rate} получен с резервного API")
-            return rate, api_date
-            
-    except Exception as e:
-        logger.warning(f"Ошибка при получении курса с резервного API: {e}")
-    
-    logger.error(f"Не удалось получить курс {from_currency}/{to_currency} ни с одного API")
-    return None, 'неизвестная дата'
+        logger.error(f"Ошибка при получении курса с Frankfurter API: {e}")
+        return None, 'неизвестная дата'
 
 def get_cbr_rates() -> tuple[dict, str]:
     """Получает курсы валют от ЦБ РФ"""
@@ -102,15 +75,28 @@ def get_cbr_rates() -> tuple[dict, str]:
         valutes = data.get('Valute', {})
         rates = {}
         
-        # Основные валюты
-        main_currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'CHF', 'CAD', 'AUD']
-        for currency in main_currencies:
+        # Основные валюты для отображения
+        main_currencies = {
+            'USD': 'Доллар США',
+            'EUR': 'Евро',
+            'GBP': 'Фунт стерлингов',
+            'JPY': 'Японская иена',
+            'CNY': 'Китайский юань',
+            'CHF': 'Швейцарский франк',
+            'CAD': 'Канадский доллар',
+            'AUD': 'Австралийский доллар',
+            'TRY': 'Турецкая лира',
+            'KZT': 'Казахстанский тенге'
+        }
+        
+        for currency, name in main_currencies.items():
             if currency in valutes:
                 currency_data = valutes[currency]
                 rates[currency] = {
                     'value': currency_data['Value'],
-                    'name': currency_data['Name'],
-                    'previous': currency_data.get('Previous', currency_data['Value'])
+                    'name': name,
+                    'previous': currency_data.get('Previous', currency_data['Value']),
+                    'nominal': currency_data.get('Nominal', 1)
                 }
         
         return rates, cbr_date
@@ -130,111 +116,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         greeting = "Привет!"
     
-    # Сначала отправляем приветствие
+    # Главное меню без отдельных кнопок валют
     keyboard = [
-        [InlineKeyboardButton("Евро (EUR)", callback_data='rate_EUR')],
-        [InlineKeyboardButton("Фунт (GBP)", callback_data='rate_GBP')],
-        [InlineKeyboardButton("Рубль (RUB)", callback_data='rate_RUB')],
-        [InlineKeyboardButton("Курсы ЦБ РФ", callback_data='cbr_rates')],
-        [InlineKeyboardButton("Помощь", callback_data='help')],
-        [InlineKeyboardButton("Настройки", callback_data='settings')],
+        [InlineKeyboardButton("📊 Курсы ЦБ РФ", callback_data='cbr_rates')],
+        [InlineKeyboardButton("🔄 Конвертер валют", callback_data='converter')],
+        [InlineKeyboardButton("❓ Помощь", callback_data='help')],
+        [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
         f'{greeting} Я бот для отслеживания курсов валют!\n\n'
-        'Сегодняшние курсы валют:',
+        '🏛 <b>Основной фокус - курсы ЦБ РФ</b>\n\n'
+        'Выберите опцию из меню ниже:',
+        parse_mode='HTML',
         reply_markup=reply_markup
     )
     
-    # Затем сразу показываем курсы валют
-    await show_today_rates(update, context)
-
-async def show_today_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показывает все курсы валют на сегодня"""
-    user = update.effective_user
-    user_id = user.id
-    base_currency = await get_user_base_currency(user_id)
-    
-    # Получаем сегодняшнюю дату
-    today = date.today().strftime('%d.%m.%Y')
-    
-    # Используем Frankfurter API для получения курсов
-    # Получаем курсы для популярных валют относительно базовой
-    popular_currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'RUB', 'CHF', 'CAD', 'AUD']
-    target_currencies = [curr for curr in popular_currencies if curr != base_currency]
-    
-    if not target_currencies:
-        await update.message.reply_text(f"Базовая валюта {base_currency} совпадает со всеми популярными валютами.")
-        return
-    
-    # Формируем запрос к API
-    symbols = ','.join(target_currencies)
-    url = f"https://api.frankfurter.app/latest?from={base_currency}&to={symbols}"
-    
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        # Получаем дату из API
-        api_date = data.get('date', today)
-        if api_date != today:
-            try:
-                date_parts = api_date.split('-')
-                if len(date_parts) == 3:
-                    api_date = f"{date_parts[2]}.{date_parts[1]}.{date_parts[0]}"
-            except:
-                api_date = today
-        
-        rates_data = data['rates']
-        
-        message = f"📊 <b>Курсы валют на {api_date} относительно {base_currency}:</b>\n\n"
-        for curr, rate in rates_data.items():
-            message += f"• {curr}: <b>{rate:.4f}</b>\n"
-        
-        # Добавляем информацию о базовой валюте
-        message += f"\n💡 <i>Базовая валюта: {base_currency}</i>"
-        
-        await update.message.reply_text(message, parse_mode='HTML')
-        
-    except Exception as e:
-        logger.error(f"Ошибка при получении курсов валют: {e}")
-        # Пробуем альтернативное API
-        try:
-            url_fallback = f"https://api.exchangerate-api.com/v4/latest/{base_currency}"
-            response = requests.get(url_fallback, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            rates_data = data['rates']
-            
-            # Пытаемся получить дату из альтернативного API
-            api_date = data.get('time_last_updated', today)
-            if api_date != today:
-                try:
-                    api_date = datetime.fromtimestamp(api_date).strftime('%d.%m.%Y')
-                except:
-                    api_date = today
-            
-            message = f"📊 <b>Курсы валют на {api_date} относительно {base_currency}:</b>\n\n"
-            for curr in ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'RUB']:
-                if curr != base_currency and curr in rates_data:
-                    rate = rates_data[curr]
-                    message += f"• {curr}: <b>{rate:.4f}</b>\n"
-            
-            message += f"\n💡 <i>Базовая валюта: {base_currency}</i>"
-                    
-            await update.message.reply_text(message, parse_mode='HTML')
-            
-        except Exception as e2:
-            logger.error(f"Ошибка при получении курсов с резервного API: {e2}")
-            await update.message.reply_text(
-                "❌ К сожалению, не удалось получить актуальные курсы валют. "
-                "Пожалуйста, попробуйте позже или используйте команду /rate для получения конкретного курса."
-            )
-
-async def cbr_rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды для курсов ЦБ РФ"""
+    # Показываем курсы ЦБ РФ сразу после старта
     await show_cbr_rates(update, context)
 
 async def show_cbr_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -249,28 +148,81 @@ async def show_cbr_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text(error_msg)
         return
     
-    message = f"🏛 <b>Курсы ЦБ РФ на {cbr_date}:</b>\n\n"
+    message = f"🏛 <b>КУРСЫ ЦБ РФ</b>\n"
+    message += f"📅 <i>на {cbr_date}</i>\n\n"
     
-    for currency, data in rates_data.items():
-        current_value = data['value']
-        previous_value = data['previous']
-        change = current_value - previous_value
-        change_percent = (change / previous_value) * 100 if previous_value else 0
+    # Основные валюты (доллар, евро)
+    main_currencies = ['USD', 'EUR']
+    for currency in main_currencies:
+        if currency in rates_data:
+            data = rates_data[currency]
+            current_value = data['value']
+            previous_value = data['previous']
+            change = current_value - previous_value
+            change_percent = (change / previous_value) * 100 if previous_value else 0
+            
+            change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+            change_text = f"{change:+.2f} руб. ({change_percent:+.2f}%)"
+            
+            message += f"💵 <b>{data['name']}</b> ({currency}):\n"
+            message += f"   <b>{current_value:.2f} руб.</b> {change_icon} {change_text}\n\n"
+    
+    # Другие валюты
+    other_currencies = [curr for curr in rates_data.keys() if curr not in main_currencies]
+    if other_currencies:
+        message += "🌍 <b>Другие валюты:</b>\n"
         
-        change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-        change_text = f"{change:+.4f} ({change_percent:+.2f}%)"
-        
-        message += f"• {data['name']} ({currency}):\n"
-        message += f"  <b>{current_value:.4f} руб.</b> {change_icon} {change_text}\n\n"
+        for currency in other_currencies:
+            data = rates_data[currency]
+            current_value = data['value']
+            previous_value = data['previous']
+            change = current_value - previous_value
+            
+            change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+            
+            # Для JPY делим на 100, так как курс указан за 100 единиц
+            if currency == 'JPY':
+                display_value = current_value / 100
+                message += f"   {data['name']} ({currency}): <b>{display_value:.4f} руб.</b> {change_icon}\n"
+            else:
+                message += f"   {data['name']} ({currency}): <b>{current_value:.4f} руб.</b> {change_icon}\n"
+    
+    message += f"\n💡 <i>Курсы обновляются ежедневно</i>"
     
     # Клавиатура с кнопкой "Назад"
-    keyboard = [[InlineKeyboardButton("Назад в меню", callback_data='back_to_main')]]
+    keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.callback_query:
         await update.callback_query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
     else:
         await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+
+async def show_converter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает интерфейс конвертера валют"""
+    message = (
+        "🔄 <b>КОНВЕРТЕР ВАЛЮТ</b>\n\n"
+        "Для конвертации используйте команду:\n"
+        "<code>/convert 100 USD EUR</code>\n\n"
+        "<b>Примеры:</b>\n"
+        "• <code>/convert 1000 USD RUB</code> - 1000 долларов в рубли\n"
+        "• <code>/convert 500 EUR USD</code> - 500 евро в доллары\n"
+        "• <code>/convert 10000 JPY RUB</code> - 10000 иен в рубли\n\n"
+        "💡 <i>Поддерживаются все основные мировые валюты</i>"
+    )
+    
+    # Клавиатура с кнопкой "Назад"
+    keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+
+async def cbr_rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды для курсов ЦБ РФ"""
+    await show_cbr_rates(update, context)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_help(update, context)
@@ -282,34 +234,34 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = (
         f"Привет{greeting} Я бот для отслеживания курсов валют!\n\n"
         
-        "🤖 <b>ОСНОВНОЙ ФУНКЦИОНАЛ</b>\n\n"
+        "🏛 <b>ОСНОВНОЙ ФОКУС - КУРСЫ ЦБ РФ</b>\n\n"
         
-        "💱 <b>Просмотр курсов валют:</b>\n"
-        "• При запуске бота автоматически показываются все курсы\n"
-        "• <code>/rates</code> - показывает курсы популярных валют\n"
-        "• <code>/cbr</code> - курсы ЦБ РФ с изменениями\n"
-        "• <code>/rate EUR USD</code> - конкретный курс между валютами\n"
-        "• Кнопки в меню для быстрого доступа\n\n"
+        "💱 <b>Основные команды:</b>\n"
+        "• <code>/start</code> - главное меню и курсы ЦБ РФ\n"
+        "• <code>/cbr</code> - актуальные курсы ЦБ РФ\n"
+        "• <code>/rates</code> - тоже курсы ЦБ РФ\n"
+        "• <code>/convert 100 USD EUR</code> - конвертация валют\n"
+        "• <code>/help</code> - эта справка\n\n"
         
         "🔄 <b>Конвертация валют:</b>\n"
-        "• <code>/convert 100 USD EUR</code> - конвертация суммы\n\n"
+        "• <code>/convert 100 USD EUR</code> - конвертирует сумму\n"
+        "• <code>/convert 500 EUR RUB</code> - евро в рубли\n"
+        "• <code>/convert 10000 JPY USD</code> - иены в доллары\n\n"
         
         "⚙️ <b>Настройки:</b>\n"
-        "• <code>/setbase EUR</code> - установка базовой валюты\n\n"
+        "• <code>/setbase EUR</code> - устанавливает базовую валюту\n\n"
         
         "🔔 <b>Уведомления:</b>\n"
-        "• <code>/alert USD RUB 80 above</code> - уведомление о курсе\n\n"
+        "• <code>/alert USD RUB 80 above</code> - уведомит о курсе\n\n"
         
-        "💡 <b>БЫСТРЫЙ СТАРТ</b>\n\n"
-        "Просто отправьте /start чтобы увидеть все курсы!\n"
-        "Используйте кнопку 'Курсы ЦБ РФ' для официальных курсов.\n\n"
-        
-        "❓ <b>ПОМОЩЬ</b>\n\n"
-        "Если возникли вопросы, используйте /help для повторного просмотра этой справки."
+        "💡 <b>ИНФОРМАЦИЯ</b>\n\n"
+        "• Курсы ЦБ РФ обновляются ежедневно\n"
+        "• Данные предоставляются Центральным Банком РФ\n"
+        "• Конвертация использует актуальные рыночные курсы"
     )
     
     # Клавиатура с кнопкой "Назад"
-    keyboard = [[InlineKeyboardButton("Назад в меню", callback_data='back_to_main')]]
+    keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.callback_query:
@@ -327,7 +279,7 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 async def rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await show_today_rates(update, context)
+    await show_cbr_rates(update, context)
 
 async def rate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     args = context.args
@@ -356,8 +308,9 @@ async def convert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if rate is not None:
         result = amount * rate
         await update.message.reply_text(
-            f"💱 <b>Курс на {api_date}:</b>\n"
-            f"{amount} {from_curr.upper()} = <b>{result:.4f}</b> {to_curr.upper()}", 
+            f"💱 <b>Конвертация по курсу на {api_date}:</b>\n\n"
+            f"{amount} {from_curr.upper()} = <b>{result:.4f}</b> {to_curr.upper()}\n\n"
+            f"<i>Курс: 1 {from_curr.upper()} = {rate:.4f} {to_curr.upper()}</i>", 
             parse_mode='HTML'
         )
     else:
@@ -410,28 +363,30 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             greeting = "Привет!"
         
         keyboard = [
-            [InlineKeyboardButton("Евро (EUR)", callback_data='rate_EUR')],
-            [InlineKeyboardButton("Фунт (GBP)", callback_data='rate_GBP')],
-            [InlineKeyboardButton("Рубль (RUB)", callback_data='rate_RUB')],
-            [InlineKeyboardButton("Курсы ЦБ РФ", callback_data='cbr_rates')],
-            [InlineKeyboardButton("Помощь", callback_data='help')],
-            [InlineKeyboardButton("Настройки", callback_data='settings')],
+            [InlineKeyboardButton("📊 Курсы ЦБ РФ", callback_data='cbr_rates')],
+            [InlineKeyboardButton("🔄 Конвертер валют", callback_data='converter')],
+            [InlineKeyboardButton("❓ Помощь", callback_data='help')],
+            [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
             f'{greeting} Я бот для отслеживания курсов валют!\n\n'
-            'Выберите опцию:',
+            '🏛 <b>Основной фокус - курсы ЦБ РФ</b>\n\n'
+            'Выберите опцию из меню ниже:',
+            parse_mode='HTML',
             reply_markup=reply_markup
         )
     elif data == 'cbr_rates':
         await show_cbr_rates(update, context)
+    elif data == 'converter':
+        await show_converter(update, context)
     elif data == 'settings':
         user_id = query.from_user.id
         base_currency = await get_user_base_currency(user_id)
         
         # Клавиатура с кнопкой "Назад"
-        keyboard = [[InlineKeyboardButton("Назад в меню", callback_data='back_to_main')]]
+        keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
@@ -441,29 +396,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode='HTML',
             reply_markup=reply_markup
         )
-    elif data.startswith('rate_'):
-        currency = data.split('_')[1]
-        user_id = query.from_user.id
-        base_currency = await get_user_base_currency(user_id)
-        rate, api_date = get_exchange_rate(base_currency, currency)
-        
-        # Клавиатура с кнопкой "Назад"
-        keyboard = [[InlineKeyboardButton("Назад в меню", callback_data='back_to_main')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        if rate is not None:
-            await query.edit_message_text(
-                f"💱 <b>Курс на {api_date}:</b>\n"
-                f"1 {base_currency} = <b>{rate:.4f}</b> {currency}\n\n"
-                "Используйте /rates для просмотра всех курсов или /convert для конвертации сумм.",
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-        else:
-            await query.edit_message_text(
-                "❌ Не удалось получить курс. Попробуйте позже.",
-                reply_markup=reply_markup
-            )
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("❌ Неизвестная команда. Используйте /help для просмотра доступных команд.")
