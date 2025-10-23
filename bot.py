@@ -23,59 +23,27 @@ if not TOKEN:
 # Базовый URL для официального API ЦБ РФ
 CBR_API_BASE = "https://www.cbr.ru/"
 
-def get_currency_rates_with_change():
-    """Получает курсы валют от ЦБ РФ с динамикой изменения"""
+def get_currency_rates_for_date(date_req):
+    """Получает курсы валют на определенную дату"""
     try:
-        # Получаем данные за сегодня и за предыдущий день для сравнения
-        today = datetime.now()
-        yesterday = today - timedelta(days=1)
-        
-        # Форматируем даты для запроса
-        date_req_today = today.strftime('%d/%m/%Y')
-        date_req_yesterday = yesterday.strftime('%d/%m/%Y')
-        
-        # Получаем курсы за сегодня
         url = f"{CBR_API_BASE}scripts/XML_daily.asp"
-        params_today = {'date_req': date_req_today}
+        params = {'date_req': date_req}
         
-        response_today = requests.get(url, params=params_today, timeout=10)
-        response_today.raise_for_status()
-        root_today = ET.fromstring(response_today.content)
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code != 200:
+            return None, None
         
-        # Получаем курсы за вчера для сравнения
-        params_yesterday = {'date_req': date_req_yesterday}
-        response_yesterday = requests.get(url, params=params_yesterday, timeout=10)
+        root = ET.fromstring(response.content)
+        cbr_date = root.get('Date', '')
         
-        rates_yesterday = {}
-        if response_yesterday.status_code == 200:
-            root_yesterday = ET.fromstring(response_yesterday.content)
-            for valute in root_yesterday.findall('Valute'):
-                valute_id = valute.get('ID')
-                value = float(valute.find('Value').text.replace(',', '.'))
-                nominal = int(valute.find('Nominal').text)
-                if nominal > 1:
-                    value = value / nominal
-                rates_yesterday[valute_id] = value
-        
-        # Получаем дату из атрибута
-        cbr_date = root_today.get('Date', '')
-        
-        # Получаем курсы валют с изменением
         rates = {}
         currency_codes = {
-            'R01235': 'USD',  # Доллар США
-            'R01239': 'EUR',  # Евро
-            'R01035': 'GBP',  # Фунт стерлингов
-            'R01820': 'JPY',  # Японская иена
-            'R01375': 'CNY',  # Китайский юань
-            'R01775': 'CHF',  # Швейцарский франк
-            'R01350': 'CAD',  # Канадский доллар
-            'R01010': 'AUD',  # Австралийский доллар
-            'R01700': 'TRY',  # Турецкая лира
-            'R01335': 'KZT',  # Казахстанский тенге
+            'R01235': 'USD',  'R01239': 'EUR',  'R01035': 'GBP',  'R01820': 'JPY',
+            'R01375': 'CNY',  'R01775': 'CHF',  'R01350': 'CAD',  'R01010': 'AUD',
+            'R01700': 'TRY',  'R01335': 'KZT',
         }
         
-        for valute in root_today.findall('Valute'):
+        for valute in root.findall('Valute'):
             valute_id = valute.get('ID')
             if valute_id in currency_codes:
                 currency_code = currency_codes[valute_id]
@@ -83,32 +51,62 @@ def get_currency_rates_with_change():
                 value = float(valute.find('Value').text.replace(',', '.'))
                 nominal = int(valute.find('Nominal').text)
                 
-                # Приводим к курсу за 1 единицу валюты
                 if nominal > 1:
                     value = value / nominal
-                
-                # Рассчитываем изменение
-                change = 0
-                change_percent = 0
-                if valute_id in rates_yesterday:
-                    yesterday_value = rates_yesterday[valute_id]
-                    change = value - yesterday_value
-                    if yesterday_value > 0:
-                        change_percent = (change / yesterday_value) * 100
                 
                 rates[currency_code] = {
                     'value': value,
                     'name': name,
-                    'nominal': nominal,
-                    'change': change,
-                    'change_percent': change_percent
+                    'nominal': nominal
                 }
         
         return rates, cbr_date
         
     except Exception as e:
-        logger.error(f"Ошибка при получении курсов валют: {e}")
-        return {}, 'неизвестная дата'
+        logger.error(f"Ошибка при получении курсов на дату {date_req}: {e}")
+        return None, None
+
+def get_currency_rates_with_tomorrow():
+    """Получает курсы валют на сегодня и завтра (если доступно)"""
+    try:
+        today = datetime.now()
+        tomorrow = today + timedelta(days=1)
+        
+        # Форматируем даты для запроса
+        date_today = today.strftime('%d/%m/%Y')
+        date_tomorrow = tomorrow.strftime('%d/%m/%Y')
+        
+        # Получаем курсы на сегодня
+        rates_today, date_today_str = get_currency_rates_for_date(date_today)
+        if not rates_today:
+            return {}, 'неизвестная дата', None, None
+        
+        # Пытаемся получить курсы на завтра
+        rates_tomorrow, date_tomorrow_str = get_currency_rates_for_date(date_tomorrow)
+        
+        # Если курсы на завтра не доступны, возвращаем только сегодняшние
+        if not rates_tomorrow:
+            return rates_today, date_today_str, None, None
+        
+        # Рассчитываем изменения для завтрашних курсов
+        changes = {}
+        for currency, today_data in rates_today.items():
+            if currency in rates_tomorrow:
+                today_value = today_data['value']
+                tomorrow_value = rates_tomorrow[currency]['value']
+                change = tomorrow_value - today_value
+                change_percent = (change / today_value) * 100 if today_value > 0 else 0
+                
+                changes[currency] = {
+                    'change': change,
+                    'change_percent': change_percent
+                }
+        
+        return rates_today, date_today_str, rates_tomorrow, changes
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении курсов с завтрашними данными: {e}")
+        return {}, 'неизвестная дата', None, None
 
 def get_key_rate():
     """Получает ключевую ставку ЦБ РФ через парсинг страницы"""
@@ -117,35 +115,29 @@ def get_key_rate():
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         
-        # Используем BeautifulSoup для парсинга HTML
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # Ищем таблицу с ключевыми ставками
         table = soup.find('table', class_='data')
         if table:
-            # Берем первую строку с данными (последнюю ставку)
             rows = table.find_all('tr')
             if len(rows) > 1:
-                # Первая строка - заголовки, вторая - последние данные
                 cells = rows[1].find_all('td')
                 if len(cells) >= 2:
                     date_str = cells[0].get_text(strip=True)
                     rate_str = cells[1].get_text(strip=True).replace(',', '.')
                     
-                    # Преобразуем дату в нужный формат
                     try:
                         date_obj = datetime.strptime(date_str, '%d.%m.%Y')
                         formatted_date = date_obj.strftime('%d.%m.%Y')
                         rate_value = float(rate_str)
                         
-                        key_rate_info = {
+                        return {
                             'rate': rate_value,
                             'date': formatted_date,
                             'is_current': True,
                             'source': 'cbr_parsed'
                         }
-                        
-                        return key_rate_info
                     except ValueError as e:
                         logger.error(f"Ошибка парсинга даты или ставки: {e}")
         
@@ -157,54 +149,11 @@ def get_key_rate():
         return None
 
 def get_inflation():
-    """Получает данные по инфляции через официальное API ЦБ РФ"""
+    """Получает данные по инфляции"""
     try:
-        # Используем API для макроэкономических показателей
-        # Получаем данные по индексу потребительских цен (ИПЦ)
         today = datetime.now()
         
-        # Формируем URL для получения данных по инфляции
-        # Используем официальный API для статистики
-        url = f"{CBR_API_BASE}statistics/macroinst/id/ipc"
-        
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Ищем последние данные по инфляции на странице
-            # Обычно они находятся в таблицах или специальных блоках
-            inflation_value = None
-            
-            # Попробуем найти данные в таблицах
-            tables = soup.find_all('table')
-            for table in tables:
-                rows = table.find_all('tr')
-                for row in rows:
-                    cells = row.find_all('td')
-                    if len(cells) >= 2:
-                        cell_text = cells[0].get_text(strip=True).lower()
-                        if 'инфляция' in cell_text or 'ипц' in cell_text:
-                            value_text = cells[1].get_text(strip=True)
-                            try:
-                                # Извлекаем числовое значение
-                                import re
-                                numbers = re.findall(r'\d+[,.]\d+', value_text)
-                                if numbers:
-                                    inflation_value = float(numbers[0].replace(',', '.'))
-                                    break
-                            except ValueError:
-                                continue
-            
-            if inflation_value:
-                inflation_data = {
-                    'current': inflation_value,
-                    'period': today.strftime('%Y'),
-                    'source': 'cbr_official'
-                }
-                return inflation_data
-        
-        # Если не удалось получить данные, возвращаем демо-данные с пометкой
-        logger.warning("Используются демо-данные по инфляции")
+        # Демо-данные по инфляции (в реальном приложении можно добавить парсинг)
         return {
             'current': 7.4,
             'target': 4.0,
@@ -224,7 +173,6 @@ def get_inflation():
 def get_metal_rates():
     """Получает курсы драгоценных металлов через API ЦБ РФ"""
     try:
-        # API для драгоценных металлов
         date_req = datetime.now().strftime('%d/%m/%Y')
         url = f"{CBR_API_BASE}scripts/XML_metall.asp"
         params = {'date_req': date_req}
@@ -232,7 +180,6 @@ def get_metal_rates():
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         
-        # Парсим XML ответ
         root = ET.fromstring(response.content)
         
         metal_rates = {}
@@ -270,47 +217,66 @@ def get_metal_rates():
         logger.error(f"Ошибка при получении курсов металлов: {e}")
         return None
 
-def format_currency_rates_message(rates_data: dict, cbr_date: str) -> str:
-    """Форматирует сообщение с курсами валют и динамикой"""
-    if not rates_data:
+def format_currency_rates_message(rates_today: dict, date_today: str, 
+                                rates_tomorrow: dict = None, changes: dict = None) -> str:
+    """Форматирует сообщение с курсами валют на сегодня и завтра"""
+    if not rates_today:
         return "❌ Не удалось получить курсы валют от ЦБ РФ."
     
     message = f"💱 <b>КУРСЫ ВАЛЮТ ЦБ РФ</b>\n"
-    message += f"📅 <i>на {cbr_date}</i>\n\n"
+    message += f"📅 <i>на {date_today}</i>\n\n"
     
-    # Основные валюты (доллар, евро) с детальной информацией
+    # Основные валюты (доллар, евро)
     main_currencies = ['USD', 'EUR']
     for currency in main_currencies:
-        if currency in rates_data:
-            data = rates_data[currency]
-            change = data['change']
-            change_percent = data['change_percent']
-            
-            change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-            change_text = f"{change:+.2f} руб. ({change_percent:+.2f}%)" if change != 0 else "без изменений"
+        if currency in rates_today:
+            data = rates_today[currency]
             
             message += f"💵 <b>{data['name']}</b> ({currency}):\n"
-            message += f"   <b>{data['value']:.2f} руб.</b> {change_icon}\n"
-            message += f"   <i>Изменение: {change_text}</i>\n\n"
+            message += f"   <b>{data['value']:.2f} руб.</b>\n"
+            
+            # Если есть данные на завтра, показываем прогноз
+            if rates_tomorrow and currency in rates_tomorrow and currency in changes:
+                tomorrow_data = rates_tomorrow[currency]
+                change_info = changes[currency]
+                change_icon = "📈" if change_info['change'] > 0 else "📉" if change_info['change'] < 0 else "➡️"
+                
+                message += f"   <i>Завтра: {tomorrow_data['value']:.2f} руб. {change_icon}</i>\n"
+                message += f"   <i>Изменение: {change_info['change']:+.2f} руб. ({change_info['change_percent']:+.2f}%)</i>\n"
+            
+            message += "\n"
     
-    # Другие валюты с краткой информацией
-    other_currencies = [curr for curr in rates_data.keys() if curr not in main_currencies]
+    # Другие валюты
+    other_currencies = [curr for curr in rates_today.keys() if curr not in main_currencies]
     if other_currencies:
         message += "🌍 <b>Другие валюты:</b>\n"
         
         for currency in other_currencies:
-            data = rates_data[currency]
-            change = data['change']
-            change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+            data = rates_today[currency]
             
             # Для JPY показываем за 100 единиц
             if currency == 'JPY':
                 display_value = data['value'] * 100
-                message += f"   {data['name']} ({currency}): <b>{display_value:.2f} руб.</b> {change_icon}\n"
+                currency_text = f"   {data['name']} ({currency}): <b>{display_value:.2f} руб.</b>"
             else:
-                message += f"   {data['name']} ({currency}): <b>{data['value']:.2f} руб.</b> {change_icon}\n"
+                currency_text = f"   {data['name']} ({currency}): <b>{data['value']:.2f} руб.</b>"
+            
+            # Добавляем индикатор изменения для завтра, если есть
+            if rates_tomorrow and currency in rates_tomorrow and currency in changes:
+                change_info = changes[currency]
+                change_icon = "📈" if change_info['change'] > 0 else "📉" if change_info['change'] < 0 else "➡️"
+                currency_text += f" {change_icon}"
+            
+            message += currency_text + "\n"
     
-    message += f"\n💡 <i>Официальные курсы ЦБ РФ с динамикой изменений</i>"
+    # Информация о доступности завтрашних курсов
+    if rates_tomorrow:
+        tomorrow_date = (datetime.now() + timedelta(days=1)).strftime('%d.%m.%Y')
+        message += f"\n📊 <i>Курсы на завтра ({tomorrow_date}) опубликованы ЦБ РФ</i>"
+    else:
+        message += f"\n💡 <i>Курсы на завтра будут опубликованы ЦБ РФ позже</i>"
+    
+    message += f"\n\n💡 <i>Официальные курсы ЦБ РФ с прогнозом на завтра</i>"
     return message
 
 def format_key_rate_message(key_rate_data: dict) -> str:
@@ -363,8 +329,6 @@ def format_inflation_message(inflation_data: dict) -> str:
         message += f"\n\n⚠️ <i>Используются демонстрационные данные</i>"
     elif source == 'demo_error':
         message += f"\n\n⚠️ <i>Используются демонстрационные данные (ошибка получения реальных)</i>"
-    elif source == 'cbr_official':
-        message += f"\n\n✅ <i>Данные получены через официальное API ЦБ РФ</i>"
     
     return message
 
@@ -392,56 +356,12 @@ def format_metal_rates_message(metal_rates: dict) -> str:
     
     return message
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /start"""
-    try:
-        user = update.effective_user
-        
-        # Сохраняем информацию о пользователе в БД
-        await update_user_info(user.id, user.first_name, user.username)
-        
-        # Создаем персонализированное приветствие
-        greeting = f"Привет, {user.first_name}!" if user.first_name else "Привет!"
-        
-        # Получаем актуальные данные для приветственного сообщения
-        key_rate_data = get_key_rate()
-        
-        # Главное меню
-        keyboard = [
-            [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
-            [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
-            [InlineKeyboardButton("📊 Инфляция", callback_data='inflation')],
-            [InlineKeyboardButton("🥇 Драгоценные металлы", callback_data='metal_rates')],
-            [InlineKeyboardButton("❓ Помощь", callback_data='help')],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        start_message = f'{greeting} Я бот для отслеживания официальных данных ЦБ РФ!\n\n'
-        start_message += '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦЕНТРАЛЬНОГО БАНКА РОССИИ</b>\n\n'
-        
-        # Добавляем информацию о ключевой ставке в приветствие
-        if key_rate_data and key_rate_data.get('is_current'):
-            rate = key_rate_data['rate']
-            start_message += f'💎 <b>Ключевая ставка ЦБ РФ:</b> <b>{rate:.2f}%</b>\n\n'
-        
-        start_message += 'Выберите раздел из меню ниже:'
-        
-        await update.message.reply_text(
-            start_message,
-            parse_mode='HTML',
-            reply_markup=reply_markup
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка в команде /start: {e}")
-        await update.message.reply_text("❌ Произошла ошибка при запуске бота. Пожалуйста, попробуйте еще раз.")
-
 async def show_currency_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показывает курсы валют с динамикой"""
+    """Показывает курсы валют на сегодня и завтра"""
     try:
-        rates_data, cbr_date = get_currency_rates_with_change()
+        rates_today, date_today, rates_tomorrow, changes = get_currency_rates_with_tomorrow()
         
-        if not rates_data:
+        if not rates_today:
             error_msg = "❌ Не удалось получить курсы валют от ЦБ РФ. Попробуйте позже."
             keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -452,7 +372,7 @@ async def show_currency_rates(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await update.message.reply_text(error_msg, reply_markup=reply_markup)
             return
         
-        message = format_currency_rates_message(rates_data, cbr_date)
+        message = format_currency_rates_message(rates_today, date_today, rates_tomorrow, changes)
         
         # Клавиатура с кнопкой "Назад"
         keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
@@ -592,17 +512,16 @@ async def show_metal_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else:
             await update.message.reply_text(error_msg, reply_markup=reply_markup)
 
-# Остальные функции без изменений (send_daily_rates, команды, обработчики)
 async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ежедневная отправка основных данных ЦБ РФ всем пользователям"""
     try:
         logger.info("Начало ежедневной рассылки данных ЦБ РФ")
         
         # Получаем основные данные
-        rates_data, cbr_date = get_currency_rates_with_change()
+        rates_today, date_today, rates_tomorrow, changes = get_currency_rates_with_tomorrow()
         key_rate_data = get_key_rate()
         
-        if not rates_data:
+        if not rates_today:
             logger.error("Не удалось получить данные для ежедневной рассылки")
             return
         
@@ -613,7 +532,7 @@ async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
             rate = key_rate_data['rate']
             message += f"💎 <b>Ключевая ставка:</b> {rate:.2f}%\n\n"
         
-        message += format_currency_rates_message(rates_data, cbr_date)
+        message += format_currency_rates_message(rates_today, date_today, rates_tomorrow, changes)
         
         # Получаем всех пользователей из базы данных
         users = await get_all_users()
@@ -644,6 +563,51 @@ async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error(f"Ошибка в ежедневной рассылке: {e}")
 
+# Остальные функции без изменений (start, команды, обработчики)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /start"""
+    try:
+        user = update.effective_user
+        
+        # Сохраняем информацию о пользователе в БД
+        await update_user_info(user.id, user.first_name, user.username)
+        
+        # Создаем персонализированное приветствие
+        greeting = f"Привет, {user.first_name}!" if user.first_name else "Привет!"
+        
+        # Получаем актуальные данные для приветственного сообщения
+        key_rate_data = get_key_rate()
+        
+        # Главное меню
+        keyboard = [
+            [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
+            [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
+            [InlineKeyboardButton("📊 Инфляция", callback_data='inflation')],
+            [InlineKeyboardButton("🥇 Драгоценные металлы", callback_data='metal_rates')],
+            [InlineKeyboardButton("❓ Помощь", callback_data='help')],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        start_message = f'{greeting} Я бот для отслеживания официальных данных ЦБ РФ!\n\n'
+        start_message += '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦЕНТРАЛЬНОГО БАНКА РОССИИ</b>\n\n'
+        
+        # Добавляем информацию о ключевой ставке в приветствие
+        if key_rate_data and key_rate_data.get('is_current'):
+            rate = key_rate_data['rate']
+            start_message += f'💎 <b>Ключевая ставка ЦБ РФ:</b> <b>{rate:.2f}%</b>\n\n'
+        
+        start_message += 'Выберите раздел из меню ниже:'
+        
+        await update.message.reply_text(
+            start_message,
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка в команде /start: {e}")
+        await update.message.reply_text("❌ Произошла ошибка при запуске бота. Пожалуйста, попробуйте еще раз.")
+
 # Команды бота (остаются без изменений)
 async def currency_rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_currency_rates(update, context)
@@ -672,7 +636,7 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             
             "💱 <b>Основные команды:</b>\n"
             "• <code>/start</code> - главное меню\n"
-            "• <code>/rates</code> - курсы валют ЦБ РФ с динамикой\n"
+            "• <code>/rates</code> - курсы валют ЦБ РФ с прогнозом на завтра\n"
             "• <code>/keyrate</code> - ключевая ставка ЦБ РФ\n"
             "• <code>/inflation</code> - данные по инфляции\n"
             "• <code>/metals</code> - курсы драгоценных металлов\n"
@@ -685,14 +649,14 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "• Автоматическая отправка основных данных каждый день в 10:00\n\n"
             
             "📊 <b>Доступные разделы:</b>\n"
-            "• <b>Курсы валют</b> - основные мировые валюты с динамикой изменений\n"
+            "• <b>Курсы валют</b> - основные мировые валюты с прогнозом на завтра\n"
             "• <b>Ключевая ставка</b> - основная процентная ставка ЦБ РФ\n"
             "• <b>Инфляция</b> - текущий уровень инфляции\n"
             "• <b>Драгоценные металлы</b> - золото, серебро, платина, палладий\n\n"
             
             "💡 <b>ИНФОРМАЦИЯ</b>\n\n"
             "• Все данные предоставляются через официальные источники ЦБ РФ\n"
-            "• Курсы обновляются ежедневно с отображением динамики\n"
+            "• Курсы на завтра показываются только после публикации ЦБ РФ\n"
             "• Ключевая ставка обновляется по решению Совета директоров\n"
             "• Используются только официальные источники данных"
         )
