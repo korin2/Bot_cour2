@@ -19,8 +19,9 @@ TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
 
-# Глобальная переменная для хранения application
+# Глобальная переменная для хранения application и scheduler
 application = None
+scheduler = None
 
 def get_cbr_rates() -> tuple[dict, str]:
     """Получает курсы валют от ЦБ РФ"""
@@ -404,6 +405,19 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception as e:
         logger.error(f"Ошибка в обработчике неизвестных команд: {e}")
 
+async def setup_scheduler():
+    """Настройка планировщика для ежедневной рассылки"""
+    global scheduler
+    scheduler = AsyncIOScheduler()
+    # 10:00 МСК = 07:00 UTC
+    scheduler.add_job(
+        send_daily_rates,
+        trigger=CronTrigger(hour=7, minute=0, timezone='UTC'),
+        id='daily_rates'
+    )
+    scheduler.start()
+    logger.info("Ежедневная рассылка настроена на 10:00 МСК (07:00 UTC)")
+
 async def post_init(application_instance: Application) -> None:
     """Функция, выполняемая после инициализации бота"""
     global application
@@ -412,10 +426,14 @@ async def post_init(application_instance: Application) -> None:
     try:
         await init_db()
         logger.info("БД инициализирована успешно")
+        
+        # Настраиваем планировщик после инициализации БД
+        await setup_scheduler()
     except Exception as e:
         logger.error(f"Ошибка при инициализации БД: {e}")
 
-def main() -> None:
+async def main() -> None:
+    """Основная асинхронная функция для запуска бота"""
     try:
         # Создаем и настраиваем application
         app = Application.builder().token(TOKEN).post_init(post_init).build()
@@ -434,23 +452,16 @@ def main() -> None:
         # Обработчик для неизвестных команд
         app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
-        # Настраиваем APScheduler для ежедневной рассылки
-        scheduler = AsyncIOScheduler()
-        # 10:00 МСК = 07:00 UTC
-        scheduler.add_job(
-            send_daily_rates,
-            trigger=CronTrigger(hour=7, minute=0, timezone='UTC'),
-            id='daily_rates'
-        )
-        scheduler.start()
-        
-        logger.info("Ежедневная рассылка настроена на 10:00 МСК (07:00 UTC)")
-
         # Запуск бота
         logger.info("Бот запускается...")
-        app.run_polling()
+        await app.run_polling()
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
+    finally:
+        # Останавливаем планировщик при завершении работы бота
+        if scheduler and scheduler.running:
+            scheduler.shutdown()
 
 if __name__ == '__main__':
-    main()
+    # Запускаем основную асинхронную функцию
+    asyncio.run(main())
