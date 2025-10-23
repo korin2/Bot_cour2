@@ -2,7 +2,7 @@ import logging
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
-from db import init_db, add_alert, update_user_info, get_all_users
+from db import init_db, add_alert, update_user_info, get_all_users, get_user_alerts, remove_alert, get_all_active_alerts, clear_user_alerts
 import os
 from datetime import datetime, timedelta
 import asyncio
@@ -356,6 +356,177 @@ def format_metal_rates_message(metal_rates: dict) -> str:
     
     return message
 
+async def check_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Проверка условий уведомлений"""
+    try:
+        logger.info("Начало проверки уведомлений")
+        
+        # Получаем текущие курсы валют
+        rates_today, date_today, _, _ = get_currency_rates_with_tomorrow()
+        
+        if not rates_today:
+            logger.error("Не удалось получить курсы для проверки уведомлений")
+            return
+        
+        # Получаем все активные уведомления
+        alerts = await get_all_active_alerts()
+        
+        if not alerts:
+            logger.info("Нет активных уведомлений для проверки")
+            return
+        
+        triggered_alerts = []
+        
+        for alert in alerts:
+            try:
+                from_curr = alert['from_currency'].upper()
+                to_curr = alert['to_currency'].upper()
+                threshold = float(alert['threshold'])
+                direction = alert['direction']
+                
+                # Проверяем доступность валюты
+                if from_curr not in rates_today:
+                    logger.warning(f"Валюта {from_curr} не найдена в курсах для алерта {alert['id']}")
+                    continue
+                
+                current_rate = rates_today[from_curr]['value']
+                
+                # Проверяем условие уведомления
+                condition_met = False
+                if direction == 'above':
+                    condition_met = current_rate >= threshold
+                elif direction == 'below':
+                    condition_met = current_rate <= threshold
+                
+                if condition_met:
+                    triggered_alerts.append((alert, current_rate))
+                    
+            except Exception as e:
+                logger.error(f"Ошибка при проверке алерта {alert.get('id', 'unknown')}: {e}")
+        
+        # Отправляем уведомления и удаляем сработавшие алерты
+        for alert, current_rate in triggered_alerts:
+            try:
+                user_id = alert['user_id']
+                from_curr = alert['from_currency']
+                to_curr = alert['to_currency']
+                threshold = alert['threshold']
+                direction = alert['direction']
+                
+                # Форматируем сообщение
+                message = (
+                    f"🔔 <b>СРАБОТАЛО УВЕДОМЛЕНИЕ!</b>\n\n"
+                    f"💱 <b>{from_curr} → {to_curr}</b>\n"
+                    f"📈 <b>Текущий курс:</b> {current_rate:.2f} руб.\n"
+                    f"🎯 <b>Установленный порог:</b> {threshold} руб.\n"
+                    f"📊 <b>Условие:</b> курс {'выше' if direction == 'above' else 'ниже'} {threshold} руб.\n\n"
+                    f"<i>Уведомление удалено из системы</i>"
+                )
+                
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=message,
+                    parse_mode='HTML'
+                )
+                
+                # Удаляем сработавшее уведомление
+                await remove_alert(alert['id'])
+                logger.info(f"Отправлено уведомление пользователю {user_id} для {from_curr}")
+                
+            except Exception as e:
+                logger.error(f"Ошибка при отправке уведомления для алерта {alert['id']}: {e}")
+        
+        logger.info(f"Проверка уведомлений завершена. Сработало: {len(triggered_alerts)}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка в функции проверки уведомлений: {e}")
+
+async def my_alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает активные уведомления пользователя"""
+    try:
+        user_id = update.effective_user.id
+        alerts = await get_user_alerts(user_id)
+        
+        if not alerts:
+            message = "📭 <b>У вас нет активных уведомлений.</b>\n\n💡 Используйте /alert для создания нового уведомления."
+            keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if update.callback_query:
+                await update.callback_query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+            return
+        
+        message = "🔔 <b>ВАШИ АКТИВНЫЕ УВЕДОМЛЕНИЯ</b>\n\n"
+        
+        for i, alert in enumerate(alerts, 1):
+            from_curr = alert['from_currency']
+            to_curr = alert['to_currency']
+            threshold = alert['threshold']
+            direction = alert['direction']
+            created_at = alert['created_at'].strftime('%d.%m.%Y %H:%M') if alert.get('created_at') else 'неизвестно'
+            
+            message += (
+                f"{i}. <b>{from_curr}/{to_curr}</b>\n"
+                f"   🎯 Порог: {threshold} руб.\n"
+                f"   📊 Условие: курс {'выше' if direction == 'above' else 'ниже'}\n"
+                f"   📅 Создано: {created_at}\n\n"
+            )
+        
+        message += "⏰ <i>Уведомления проверяются каждые 30 минут</i>"
+        
+        keyboard = [
+            [InlineKeyboardButton("🗑 Очистить все", callback_data='clear_all_alerts')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в команде /myalerts: {e}")
+        error_msg = "❌ Ошибка при получении уведомлений."
+        keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(error_msg, reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(error_msg, reply_markup=reply_markup)
+
+async def clear_all_alerts_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Очищает все уведомления пользователя"""
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = query.from_user.id
+        alerts = await get_user_alerts(user_id)
+        
+        if not alerts:
+            await query.edit_message_text("❌ У вас нет активных уведомлений для удаления.")
+            return
+        
+        # Удаляем все уведомления пользователя
+        await clear_user_alerts(user_id)
+        
+        keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "✅ <b>Все ваши уведомления удалены.</b>",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при очистке уведомлений: {e}")
+        await update.callback_query.edit_message_text("❌ Ошибка при удалении уведомлений.")
+
 async def show_currency_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает курсы валют на сегодня и завтра"""
     try:
@@ -563,7 +734,6 @@ async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error(f"Ошибка в ежедневной рассылке: {e}")
 
-# Остальные функции без изменений (start, команды, обработчики)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /start"""
     try:
@@ -584,6 +754,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
             [InlineKeyboardButton("📊 Инфляция", callback_data='inflation')],
             [InlineKeyboardButton("🥇 Драгоценные металлы", callback_data='metal_rates')],
+            [InlineKeyboardButton("🔔 Мои уведомления", callback_data='my_alerts')],
             [InlineKeyboardButton("❓ Помощь", callback_data='help')],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -608,7 +779,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Ошибка в команде /start: {e}")
         await update.message.reply_text("❌ Произошла ошибка при запуске бота. Пожалуйста, попробуйте еще раз.")
 
-# Команды бота (остаются без изменений)
 async def currency_rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_currency_rates(update, context)
 
@@ -640,12 +810,18 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "• <code>/keyrate</code> - ключевая ставка ЦБ РФ\n"
             "• <code>/inflation</code> - данные по инфляции\n"
             "• <code>/metals</code> - курсы драгоценных металлов\n"
+            "• <code>/myalerts</code> - мои активные уведомления\n"
             "• <code>/help</code> - эта справка\n\n"
             
             "🔔 <b>Уведомления:</b>\n"
-            "• <code>/alert USD RUB 80 above</code> - уведомит о курсе\n\n"
+            "• <code>/alert USD RUB 80 above</code> - уведомит когда USD выше 80 руб.\n"
+            "• <code>/alert EUR RUB 90 below</code> - уведомит когда EUR ниже 90 руб.\n\n"
             
-            "⏰ <b>Ежедневная рассылка</b>\n"
+            "⏰ <b>Автоматические уведомления</b>\n"
+            "• Проверка условий каждые 30 минут\n"
+            "• Автоматическое удаление после срабатывания\n\n"
+            
+            "🌅 <b>Ежедневная рассылка</b>\n"
             "• Автоматическая отправка основных данных каждый день в 10:00\n\n"
             
             "📊 <b>Доступные разделы:</b>\n"
@@ -696,47 +872,97 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         args = context.args
         if len(args) != 4:
-            # Клавиатура с кнопкой "Назад"
             keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
-                "Используйте: /alert <из> <в> <порог> <above|below>\n\n"
-                "Пример: /alert USD RUB 80 above",
+                "📝 <b>Использование:</b> /alert &lt;из&gt; &lt;в&gt; &lt;порог&gt; &lt;above|below&gt;\n\n"
+                "💡 <b>Примеры:</b>\n"
+                "• <code>/alert USD RUB 80 above</code> - уведомить когда USD выше 80 руб.\n"
+                "• <code>/alert EUR RUB 90 below</code> - уведомить когда EUR ниже 90 руб.\n\n"
+                "💱 <b>Доступные валюты:</b> USD, EUR, GBP, JPY, CNY, CHF, CAD, AUD, TRY, KZT",
+                parse_mode='HTML',
                 reply_markup=reply_markup
             )
             return
         
-        from_curr, to_curr = args[0], args[1]
-        try:
-            threshold = float(args[2])
-        except ValueError:
-            # Клавиатура с кнопкой "Назад"
+        from_curr, to_curr = args[0].upper(), args[1].upper()
+        
+        # Проверяем поддерживаемые валюты
+        supported_currencies = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'CHF', 'CAD', 'AUD', 'TRY', 'KZT']
+        if from_curr not in supported_currencies:
             keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text("❌ Порог должен быть числом.", reply_markup=reply_markup)
+            await update.message.reply_text(
+                f"❌ Валюта {from_curr} не поддерживается.\n\n"
+                f"💱 <b>Доступные валюты:</b> {', '.join(supported_currencies)}",
+                parse_mode='HTML',
+                reply_markup=reply_markup
+            )
+            return
+        
+        # Проверяем, что целевая валюта - RUB
+        if to_curr != 'RUB':
+            keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "❌ В настоящее время поддерживаются только уведомления для пар с RUB.\n"
+                "💡 Используйте: /alert USD RUB 80 above",
+                reply_markup=reply_markup
+            )
+            return
+        
+        try:
+            threshold = float(args[2])
+            if threshold <= 0:
+                raise ValueError("Порог должен быть положительным числом")
+        except ValueError:
+            keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "❌ Порог должен быть положительным числом.",
+                reply_markup=reply_markup
+            )
             return
         
         direction = args[3].lower()
         if direction not in ['above', 'below']:
-            # Клавиатура с кнопкой "Назад"
             keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text("❌ Направление должно быть 'above' или 'below'.", reply_markup=reply_markup)
+            await update.message.reply_text(
+                "❌ Направление должно быть 'above' или 'below'.",
+                reply_markup=reply_markup
+            )
             return
         
         user_id = update.effective_message.from_user.id
         await add_alert(user_id, from_curr, to_curr, threshold, direction)
         
-        # Клавиатура с кнопкой "Назад"
-        keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+        keyboard = [
+            [InlineKeyboardButton("📋 Мои уведомления", callback_data='my_alerts')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"🔔 Уведомление установлено: {from_curr}/{to_curr} {'>' if direction == 'above' else '<'} {threshold}",
+            f"✅ <b>УВЕДОМЛЕНИЕ УСТАНОВЛЕНО!</b>\n\n"
+            f"💱 <b>Пара:</b> {from_curr}/{to_curr}\n"
+            f"🎯 <b>Порог:</b> {threshold} руб.\n"
+            f"📊 <b>Условие:</b> курс {'выше' if direction == 'above' else 'ниже'} {threshold} руб.\n\n"
+            f"💡 Уведомление будет проверяться каждые 30 минут",
+            parse_mode='HTML',
             reply_markup=reply_markup
         )
     except Exception as e:
         logger.error(f"Ошибка в команде /alert: {e}")
+        keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "❌ Произошла ошибка при установке уведомления.",
+            reply_markup=reply_markup
+        )
+
+async def myalerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await my_alerts_command(update, context)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
@@ -758,6 +984,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
                 [InlineKeyboardButton("📊 Инфляция", callback_data='inflation')],
                 [InlineKeyboardButton("🥇 Драгоценные металлы", callback_data='metal_rates')],
+                [InlineKeyboardButton("🔔 Мои уведомления", callback_data='my_alerts')],
                 [InlineKeyboardButton("❓ Помощь", callback_data='help')],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -777,6 +1004,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await show_inflation(update, context)
         elif data == 'metal_rates':
             await show_metal_rates(update, context)
+        elif data == 'my_alerts':
+            await my_alerts_command(update, context)
+        elif data == 'clear_all_alerts':
+            await clear_all_alerts_handler(update, context)
     except Exception as e:
         logger.error(f"Ошибка в обработчике кнопок: {e}")
 
@@ -817,6 +1048,7 @@ def main() -> None:
         application.add_handler(CommandHandler("inflation", inflation_command))
         application.add_handler(CommandHandler("metals", metals_command))
         application.add_handler(CommandHandler("alert", alert_command))
+        application.add_handler(CommandHandler("myalerts", myalerts_command))
         
         # Обработчик для inline-кнопок
         application.add_handler(CallbackQueryHandler(button_handler))
@@ -835,8 +1067,16 @@ def main() -> None:
                 days=(0, 1, 2, 3, 4, 5, 6)
             )
             logger.info("Ежедневная рассылка настроена на 10:00 МСК (07:00 UTC)")
+            
+            # Проверка уведомлений каждые 30 минут
+            job_queue.run_repeating(
+                check_alerts, 
+                interval=1800,  # 30 минут в секундах
+                first=10        # Первая проверка через 10 секунд после запуска
+            )
+            logger.info("Проверка уведомлений настроена на каждые 30 минут")
         else:
-            logger.warning("JobQueue не доступен. Ежедневная рассылка не будет работать.")
+            logger.warning("JobQueue не доступен. Ежедневная рассылка и проверка уведомлений не будут работать.")
 
         # Запуск бота
         logger.info("Бот запускается...")
