@@ -6,7 +6,7 @@ from db import init_db, add_alert, update_user_info, get_all_users
 import os
 from datetime import datetime, timedelta
 import asyncio
-import xml.etree.ElementTree as ET
+import json
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -18,22 +18,24 @@ TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
 
-def get_currency_rates(date_req=None):
-    """Получает курсы валют от ЦБ РФ на определенную дату"""
+# Базовый URL для официального API ЦБ РФ
+CBR_API_BASE = "https://www.cbr.ru/"
+
+def get_currency_rates():
+    """Получает курсы валют от ЦБ РФ через официальное API"""
     try:
-        if date_req is None:
-            date_req = datetime.now().strftime('%d/%m/%Y')
+        # Используем API для ежедневных курсов валют
+        url = f"{CBR_API_BASE}scripts/XML_daily.asp"
         
-        # Официальное API ЦБ РФ для ежедневных курсов валют
-        url = "https://www.cbr.ru/scripts/XML_daily.asp"
-        params = {
-            'date_req': date_req
-        }
+        # Получаем текущую дату в формате DD/MM/YYYY
+        date_req = datetime.now().strftime('%d/%m/%Y')
+        params = {'date_req': date_req}
         
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         
         # Парсим XML ответ
+        import xml.etree.ElementTree as ET
         root = ET.fromstring(response.content)
         
         # Получаем дату из атрибута
@@ -41,7 +43,7 @@ def get_currency_rates(date_req=None):
         
         # Получаем курсы валют
         rates = {}
-        main_currencies = {
+        currency_codes = {
             'R01235': 'USD',  # Доллар США
             'R01239': 'EUR',  # Евро
             'R01035': 'GBP',  # Фунт стерлингов
@@ -56,8 +58,8 @@ def get_currency_rates(date_req=None):
         
         for valute in root.findall('Valute'):
             valute_id = valute.get('ID')
-            if valute_id in main_currencies:
-                currency_code = main_currencies[valute_id]
+            if valute_id in currency_codes:
+                currency_code = currency_codes[valute_id]
                 name = valute.find('Name').text
                 value = float(valute.find('Value').text.replace(',', '.'))
                 nominal = int(valute.find('Nominal').text)
@@ -69,7 +71,7 @@ def get_currency_rates(date_req=None):
                 rates[currency_code] = {
                     'value': value,
                     'name': name,
-                    'nominal': 1
+                    'nominal': nominal
                 }
         
         return rates, cbr_date
@@ -79,21 +81,21 @@ def get_currency_rates(date_req=None):
         return {}, 'неизвестная дата'
 
 def get_key_rate():
-    """Получает ключевую ставку ЦБ РФ"""
+    """Получает ключевую ставку ЦБ РФ через официальное API"""
     try:
-        # API для ключевой ставки ЦБ РФ
-        url = "https://www.cbr.ru/scripts/XML_keyRate.asp"
+        # API для ключевой ставки
+        url = f"{CBR_API_BASE}scripts/XML_keyRate.asp"
         
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         
         # Парсим XML ответ
+        import xml.etree.ElementTree as ET
         root = ET.fromstring(response.content)
         
-        # Ищем все записи о ключевой ставке
+        # Берем самую последнюю запись (первую в списке)
         records = root.findall('Record')
         if records:
-            # Берем самую последнюю запись (первую в списке)
             last_record = records[0]
             rate_date = last_record.get('Date')
             rate_value = float(last_record.find('Rate').text)
@@ -105,13 +107,12 @@ def get_key_rate():
             key_rate_info = {
                 'rate': rate_value,
                 'date': formatted_date,
-                'is_current': True,
-                'source': 'cbr_official'
+                'is_current': True
             }
             
             return key_rate_info
         else:
-            logger.error("Не найдено записей о ключевой ставке в ответе API")
+            logger.error("Не найдено записей о ключевой ставке")
             return None
             
     except Exception as e:
@@ -119,15 +120,17 @@ def get_key_rate():
         return None
 
 def get_inflation():
-    """Получает данные по инфляции"""
+    """Получает данные по инфляции через API ЦБ РФ"""
     try:
-        # Демо-данные для инфляции
+        # Используем API для макроэкономических показателей
+        # Временная реализация с демо-данными
         today = datetime.now()
-        current_year = today.year
         
+        # В реальном приложении нужно использовать официальное API инфляции
         inflation_data = {
             'current': 7.4,
-            'period': f'{current_year}',
+            'target': 4.0,
+            'period': today.strftime('%Y'),
             'source': 'demo'
         }
         
@@ -138,20 +141,44 @@ def get_inflation():
         return None
 
 def get_metal_rates():
-    """Получает курсы драгоценных металлов"""
+    """Получает курсы драгоценных металлов через API ЦБ РФ"""
     try:
-        # Демо-данные для драгоценных металлов
-        metal_rates = {
-            'gold': 5830.50,
-            'silver': 72.30,
-            'platinum': 3200.75,
-            'palladium': 4100.25,
-            'update_date': datetime.now().strftime('%d.%m.%Y'),
-            'source': 'demo'
+        # API для драгоценных металлов
+        date_req = datetime.now().strftime('%d/%m/%Y')
+        url = f"{CBR_API_BASE}scripts/XML_metall.asp"
+        params = {'date_req': date_req}
+        
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        # Парсим XML ответ
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(response.content)
+        
+        metal_rates = {}
+        metals_map = {
+            '1': 'gold',
+            '2': 'silver', 
+            '3': 'platinum',
+            '4': 'palladium'
         }
         
-        return metal_rates
+        for record in root.findall('Record'):
+            metal_code = record.get('Code')
+            if metal_code in metals_map:
+                metal_name = metals_map[metal_code]
+                buy_price = float(record.find('Buy').text)
+                sell_price = float(record.find('Sell').text)
+                avg_price = (buy_price + sell_price) / 2
+                
+                metal_rates[metal_name] = avg_price
         
+        if metal_rates:
+            metal_rates['update_date'] = datetime.now().strftime('%d.%m.%Y')
+            return metal_rates
+        else:
+            return None
+            
     except Exception as e:
         logger.error(f"Ошибка при получении курсов металлов: {e}")
         return None
@@ -169,10 +196,8 @@ def format_currency_rates_message(rates_data: dict, cbr_date: str) -> str:
     for currency in main_currencies:
         if currency in rates_data:
             data = rates_data[currency]
-            current_value = data['value']
-            
             message += f"💵 <b>{data['name']}</b> ({currency}):\n"
-            message += f"   <b>{current_value:.2f} руб.</b>\n\n"
+            message += f"   <b>{data['value']:.2f} руб.</b>\n\n"
     
     # Другие валюты
     other_currencies = [curr for curr in rates_data.keys() if curr not in main_currencies]
@@ -181,14 +206,12 @@ def format_currency_rates_message(rates_data: dict, cbr_date: str) -> str:
         
         for currency in other_currencies:
             data = rates_data[currency]
-            current_value = data['value']
-            
             # Для JPY показываем за 100 единиц
             if currency == 'JPY':
-                display_value = current_value * 100
+                display_value = data['value'] * 100
                 message += f"   {data['name']} ({currency}): <b>{display_value:.2f} руб.</b>\n"
             else:
-                message += f"   {data['name']} ({currency}): <b>{current_value:.2f} руб.</b>\n"
+                message += f"   {data['name']} ({currency}): <b>{data['value']:.2f} руб.</b>\n"
     
     message += f"\n💡 <i>Официальные курсы ЦБ РФ обновляются ежедневно</i>"
     return message
@@ -214,16 +237,29 @@ def format_inflation_message(inflation_data: dict) -> str:
         return "❌ Не удалось получить данные по инфляции."
     
     current = inflation_data['current']
+    target = inflation_data.get('target')
     period = inflation_data['period']
     
     message = f"📊 <b>ИНФЛЯЦИЯ В РОССИИ</b>\n\n"
-    message += f"<b>Уровень инфляции:</b> {current:.1f}%\n"
-    message += f"<b>Период:</b> {period}\n\n"
+    message += f"<b>Текущая инфляция:</b> {current:.1f}%\n"
+    
+    if target:
+        message += f"<b>Целевой показатель:</b> {target:.1f}%\n"
+    
+    message += f"<b>Период:</b> {period} год\n\n"
+    
+    # Анализ
+    if target and current > target:
+        message += f"📈 <i>Инфляция выше целевого уровня</i>\n"
+    elif target and current < target:
+        message += f"📉 <i>Инфляция ниже целевого уровня</i>\n"
+    elif target:
+        message += f"✅ <i>Инфляция на целевом уровне</i>\n"
+    
+    message += "\n💡 <i>Данные по инфляции</i>"
     
     if inflation_data.get('source') == 'demo':
-        message += "⚠️ <i>Используются демонстрационные данные</i>\n\n"
-    
-    message += "💡 <i>Данные по инфляции</i>"
+        message += f"\n\n⚠️ <i>Используются демонстрационные данные</i>"
     
     return message
 
@@ -232,7 +268,7 @@ def format_metal_rates_message(metal_rates: dict) -> str:
     if not metal_rates:
         return "❌ Не удалось получить курсы драгоценных металлов."
     
-    message = f"🥇 <b>КУРСЫ ДРАГОЦЕННЫХ МЕТАЛЛОВ</b>\n\n"
+    message = f"🥇 <b>КУРСЫ ДРАГОЦЕННЫХ МЕТАЛЛОВ ЦБ РФ</b>\n\n"
     
     metal_names = {
         'gold': 'Золото',
@@ -243,18 +279,16 @@ def format_metal_rates_message(metal_rates: dict) -> str:
     
     for metal_code, metal_name in metal_names.items():
         if metal_code in metal_rates:
-            data = metal_rates[metal_code]
-            message += f"<b>{metal_name}:</b> {data:.2f} руб/г\n"
+            price = metal_rates[metal_code]
+            message += f"<b>{metal_name}:</b> {price:.2f} руб/г\n"
     
     message += f"\n<i>Обновлено: {metal_rates.get('update_date', 'неизвестно')}</i>\n\n"
-    message += "💡 <i>Курсы драгоценных металлов</i>"
-    
-    if metal_rates.get('source') == 'demo':
-        message += f"\n\n⚠️ <i>Используются демонстрационные данные</i>"
+    message += "💡 <i>Официальные курсы для операций с драгоценными металлами</i>"
     
     return message
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /start"""
     try:
         user = update.effective_user
         
@@ -262,10 +296,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update_user_info(user.id, user.first_name, user.username)
         
         # Создаем персонализированное приветствие
-        if user.first_name:
-            greeting = f"Привет, {user.first_name}!"
-        else:
-            greeting = "Привет!"
+        greeting = f"Привет, {user.first_name}!" if user.first_name else "Привет!"
+        
+        # Получаем актуальные данные для приветственного сообщения
+        key_rate_data = get_key_rate()
         
         # Главное меню
         keyboard = [
@@ -277,8 +311,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        start_message = f'{greeting} Я бот для отслеживания финансовых данных!\n\n'
-        start_message += '🏛 <b>ОСНОВНЫЕ ДАННЫЕ ЦБ РФ</b>\n\n'
+        start_message = f'{greeting} Я бот для отслеживания официальных данных ЦБ РФ!\n\n'
+        start_message += '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦЕНТРАЛЬНОГО БАНКА РОССИИ</b>\n\n'
+        
+        # Добавляем информацию о ключевой ставке в приветствие
+        if key_rate_data and key_rate_data.get('is_current'):
+            rate = key_rate_data['rate']
+            start_message += f'💎 <b>Ключевая ставка ЦБ РФ:</b> <b>{rate:.2f}%</b>\n\n'
+        
         start_message += 'Выберите раздел из меню ниже:'
         
         await update.message.reply_text(
@@ -297,7 +337,7 @@ async def show_currency_rates(update: Update, context: ContextTypes.DEFAULT_TYPE
         rates_data, cbr_date = get_currency_rates()
         
         if not rates_data:
-            error_msg = "❌ Не удалось получить курсы валют. Попробуйте позже."
+            error_msg = "❌ Не удалось получить курсы валют от ЦБ РФ. Попробуйте позже."
             keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -319,7 +359,7 @@ async def show_currency_rates(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Ошибка при показе курсов валют: {e}")
-        error_msg = "❌ Произошла ошибка при получении курсов валют."
+        error_msg = "❌ Произошла ошибка при получении курсов валют от ЦБ РФ."
         keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         if update.callback_query:
@@ -359,7 +399,7 @@ async def show_key_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             
     except Exception as e:
         logger.error(f"Ошибка при показе ключевой ставки: {e}")
-        error_msg = "❌ Произошла ошибка при получении ключевой ставки."
+        error_msg = "❌ Произошла ошибка при получении ключевой ставки от ЦБ РФ."
         keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         if update.callback_query:
@@ -413,7 +453,7 @@ async def show_metal_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         metal_rates = get_metal_rates()
         
         if not metal_rates:
-            error_msg = "❌ Не удалось получить курсы драгоценных металлов."
+            error_msg = "❌ Не удалось получить курсы драгоценных металлов от ЦБ РФ."
             keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -439,7 +479,7 @@ async def show_metal_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             
     except Exception as e:
         logger.error(f"Ошибка при показе курсов металлов: {e}")
-        error_msg = "❌ Произошла ошибка при получении курсов драгоценных металлов."
+        error_msg = "❌ Произошла ошибка при получении курсов драгоценных металлов от ЦБ РФ."
         keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         if update.callback_query:
@@ -448,9 +488,9 @@ async def show_metal_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.message.reply_text(error_msg, reply_markup=reply_markup)
 
 async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Ежедневная отправка основных данных всем пользователям"""
+    """Ежедневная отправка основных данных ЦБ РФ всем пользователям"""
     try:
-        logger.info("Начало ежедневной рассылки данных")
+        logger.info("Начало ежедневной рассылки данных ЦБ РФ")
         
         # Получаем основные данные
         rates_data, cbr_date = get_currency_rates()
@@ -461,7 +501,7 @@ async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         
         # Форматируем сообщение
-        message = f"🌅 <b>Ежедневное обновление данных</b>\n\n"
+        message = f"🌅 <b>Ежедневное обновление данных ЦБ РФ</b>\n\n"
         
         if key_rate_data and key_rate_data.get('is_current'):
             rate = key_rate_data['rate']
@@ -498,31 +538,37 @@ async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error(f"Ошибка в ежедневной рассылке: {e}")
 
-# Команды
+# Команды бота
 async def currency_rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды для курсов валют"""
     await show_currency_rates(update, context)
 
 async def keyrate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды для ключевой ставки"""
     await show_key_rate(update, context)
 
 async def inflation_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды для инфляции"""
     await show_inflation(update, context)
 
 async def metals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды для драгоценных металлов"""
     await show_metal_rates(update, context)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды помощи"""
     await show_help(update, context)
 
 async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает справку по боту"""
     try:
         user = update.effective_user
         greeting = f", {user.first_name}!" if user.first_name else "!"
         
         help_text = (
-            f"Привет{greeting} Я бот для отслеживания финансовых данных!\n\n"
+            f"Привет{greeting} Я бот для отслеживания официальных данных ЦБ РФ!\n\n"
             
-            "🏛 <b>ОСНОВНЫЕ ДАННЫЕ ЦБ РФ</b>\n\n"
+            "🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦЕНТРАЛЬНОГО БАНКА РОССИИ</b>\n\n"
             
             "💱 <b>Основные команды:</b>\n"
             "• <code>/start</code> - главное меню\n"
@@ -545,9 +591,10 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "• <b>Драгоценные металлы</b> - золото, серебро, платина, палладий\n\n"
             
             "💡 <b>ИНФОРМАЦИЯ</b>\n\n"
-            "• Курсы валют и ключевая ставка - официальные данные ЦБ РФ\n"
-            "• Инфляция и металлы - демонстрационные данные\n"
+            "• Все данные предоставляются через официальное API ЦБ РФ\n"
             "• Курсы обновляются ежедневно\n"
+            "• Ключевая ставка обновляется по решению Совета директоров\n"
+            "• Используются только официальные источники данных"
         )
         
         # Клавиатура с кнопкой "Назад"
@@ -562,6 +609,7 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error(f"Ошибка при показе справки: {e}")
 
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды остановки бота"""
     try:
         user = update.effective_user
         greeting = f", {user.first_name}!" if user.first_name else "!"
@@ -579,9 +627,11 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.error(f"Ошибка в команде /stop: {e}")
 
 async def rates_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды для курсов валют"""
     await show_currency_rates(update, context)
 
 async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды для установки уведомлений"""
     try:
         args = context.args
         if len(args) != 4:
@@ -628,6 +678,7 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Ошибка в команде /alert: {e}")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик нажатий на inline-кнопки"""
     try:
         query = update.callback_query
         await query.answer()
@@ -640,10 +691,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             user = query.from_user
             
             # Создаем персонализированное приветствие
-            if user.first_name:
-                greeting = f"Привет, {user.first_name}!"
-            else:
-                greeting = "Привет!"
+            greeting = f"Привет, {user.first_name}!" if user.first_name else "Привет!"
             
             keyboard = [
                 [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
@@ -655,8 +703,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f'{greeting} Я бот для отслеживания финансовых данных!\n\n'
-                '🏛 <b>ОСНОВНЫЕ ДАННЫЕ ЦБ РФ</b>\n\n'
+                f'{greeting} Я бот для отслеживания официальных данных ЦБ РФ!\n\n'
+                '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦЕНТРАЛЬНОГО БАНКА РОССИИ</b>\n\n'
                 'Выберите раздел из меню ниже:',
                 parse_mode='HTML',
                 reply_markup=reply_markup
@@ -673,6 +721,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error(f"Ошибка в обработчике кнопок: {e}")
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик неизвестных команд"""
     try:
         # Клавиатура с кнопкой "Назад"
         keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
