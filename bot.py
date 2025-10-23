@@ -22,6 +22,8 @@ if not TOKEN:
 
 # Базовый URL для официального API ЦБ РФ
 CBR_API_BASE = "https://www.cbr.ru/"
+# CoinGecko API для криптовалют
+COINGECKO_API_BASE = "https://api.coingecko.com/api/v3/"
 
 def get_currency_rates_for_date(date_req):
     """Получает курсы валют на определенную дату"""
@@ -306,6 +308,75 @@ def get_metal_rates():
         logger.error(f"Ошибка при получении курсов металлов: {e}")
         return None
 
+def get_crypto_rates():
+    """Получает курсы криптовалют через CoinGecko API"""
+    try:
+        # Основные криптовалюты для отслеживания
+        crypto_ids = [
+            'bitcoin', 'ethereum', 'binancecoin', 'ripple', 'cardano',
+            'solana', 'polkadot', 'dogecoin', 'tron', 'litecoin'
+        ]
+        
+        url = f"{COINGECKO_API_BASE}simple/price"
+        params = {
+            'ids': ','.join(crypto_ids),
+            'vs_currencies': 'rub,usd',
+            'include_24hr_change': 'true',
+            'include_last_updated_at': 'true'
+        }
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+        }
+        
+        response = requests.get(url, params=params, headers=headers, timeout=15)
+        
+        if response.status_code != 200:
+            logger.error(f"Ошибка CoinGecko API: {response.status_code}")
+            return None
+            
+        data = response.json()
+        
+        # Маппинг названий криптовалют
+        crypto_names = {
+            'bitcoin': {'name': 'Bitcoin', 'symbol': 'BTC'},
+            'ethereum': {'name': 'Ethereum', 'symbol': 'ETH'},
+            'binancecoin': {'name': 'Binance Coin', 'symbol': 'BNB'},
+            'ripple': {'name': 'XRP', 'symbol': 'XRP'},
+            'cardano': {'name': 'Cardano', 'symbol': 'ADA'},
+            'solana': {'name': 'Solana', 'symbol': 'SOL'},
+            'polkadot': {'name': 'Polkadot', 'symbol': 'DOT'},
+            'dogecoin': {'name': 'Dogecoin', 'symbol': 'DOGE'},
+            'tron': {'name': 'TRON', 'symbol': 'TRX'},
+            'litecoin': {'name': 'Litecoin', 'symbol': 'LTC'}
+        }
+        
+        crypto_rates = {}
+        for crypto_id, info in crypto_names.items():
+            if crypto_id in data:
+                crypto_data = data[crypto_id]
+                crypto_rates[crypto_id] = {
+                    'name': info['name'],
+                    'symbol': info['symbol'],
+                    'price_rub': crypto_data.get('rub', 0),
+                    'price_usd': crypto_data.get('usd', 0),
+                    'change_24h': crypto_data.get('rub_24h_change', 0),
+                    'last_updated': crypto_data.get('last_updated_at', 0)
+                }
+        
+        if crypto_rates:
+            crypto_rates['update_time'] = datetime.now().strftime('%d.%m.%Y %H:%M')
+            crypto_rates['source'] = 'coingecko'
+            return crypto_rates
+        else:
+            logger.error("Не найдено данных по криптовалютам в ответе API")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Ошибка при получении курсов криптовалют: {e}")
+        return None
+
 def format_currency_rates_message(rates_today: dict, date_today: str, 
                                 rates_tomorrow: dict = None, changes: dict = None) -> str:
     """Форматирует сообщение с курсами валют на сегодня и завтра"""
@@ -448,6 +519,51 @@ def format_metal_rates_message(metal_rates: dict) -> str:
     
     if metal_rates.get('source') == 'cbr_official':
         message += f"\n\n✅ <i>Данные получены через официальное API ЦБ РФ</i>"
+    
+    return message
+
+def format_crypto_rates_message(crypto_rates: dict) -> str:
+    """Форматирует сообщение с курсами криптовалют"""
+    if not crypto_rates:
+        return "❌ Не удалось получить курсы криптовалют от CoinGecko API."
+    
+    message = f"₿ <b>КУРСЫ КРИПТОВАЛЮТ</b>\n\n"
+    
+    # Основные криптовалюты (первые 5)
+    main_cryptos = ['bitcoin', 'ethereum', 'binancecoin', 'ripple', 'cardano']
+    
+    for crypto_id in main_cryptos:
+        if crypto_id in crypto_rates:
+            data = crypto_rates[crypto_id]
+            change_24h = data['change_24h']
+            change_icon = "📈" if change_24h > 0 else "📉" if change_24h < 0 else "➡️"
+            
+            message += (
+                f"<b>{data['name']} ({data['symbol']})</b>\n"
+                f"   💰 <b>{data['price_rub']:,.0f} руб.</b>\n"
+                f"   💵 {data['price_usd']:,.2f} $\n"
+                f"   {change_icon} <i>{change_24h:+.2f}% (24ч)</i>\n\n"
+            )
+    
+    # Остальные криптовалюты
+    other_cryptos = [crypto_id for crypto_id in crypto_rates.keys() if crypto_id not in main_cryptos]
+    if other_cryptos:
+        message += "🔹 <b>Другие криптовалюты:</b>\n"
+        
+        for crypto_id in other_cryptos:
+            data = crypto_rates[crypto_id]
+            change_24h = data['change_24h']
+            change_icon = "📈" if change_24h > 0 else "📉" if change_24h < 0 else "➡️"
+            
+            message += (
+                f"   <b>{data['symbol']}</b>: {data['price_rub']:,.0f} руб. {change_icon}\n"
+            )
+    
+    message += f"\n<i>Обновлено: {crypto_rates.get('update_time', 'неизвестно')}</i>\n\n"
+    message += "💡 <i>Данные предоставлены CoinGecko API</i>"
+    
+    if crypto_rates.get('source') == 'coingecko':
+        message += f"\n\n✅ <i>Официальные данные CoinGecko</i>"
     
     return message
 
@@ -870,6 +986,46 @@ async def show_metal_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else:
             await update.message.reply_text(error_msg, reply_markup=reply_markup)
 
+async def show_crypto_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает курсы криптовалют"""
+    try:
+        crypto_rates = get_crypto_rates()
+        
+        if not crypto_rates:
+            error_msg = "❌ Не удалось получить курсы криптовалют от CoinGecko API."
+            keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if update.callback_query:
+                await update.callback_query.message.reply_text(error_msg, reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(error_msg, reply_markup=reply_markup)
+            return
+        
+        message = format_crypto_rates_message(crypto_rates)
+        
+        # Клавиатура с кнопками
+        keyboard = [
+            [InlineKeyboardButton("🔄 Обновить", callback_data='crypto_rates')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при показе курсов криптовалют: {e}")
+        error_msg = "❌ Произошла ошибка при получении курсов криптовалют от CoinGecko API."
+        keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        if update.callback_query:
+            await update.callback_query.message.reply_text(error_msg, reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(error_msg, reply_markup=reply_markup)
+
 async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ежедневная отправка основных данных ЦБ РФ всем пользователям"""
     try:
@@ -938,6 +1094,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Главное меню
         keyboard = [
             [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
+            [InlineKeyboardButton("₿ Криптовалюты", callback_data='crypto_rates')],
             [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
             [InlineKeyboardButton("📊 Инфляция", callback_data='inflation')],
             [InlineKeyboardButton("🥇 Драгоценные металлы", callback_data='metal_rates')],
@@ -946,8 +1103,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        start_message = f'{greeting} Я бот для отслеживания официальных данных ЦБ РФ!\n\n'
-        start_message += '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦЕНТРАЛЬНОГО БАНКА РОССИИ</b>\n\n'
+        start_message = f'{greeting} Я бот для отслеживания финансовых данных!\n\n'
+        start_message += '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ</b>\n\n'
         
         # Добавляем информацию о ключевой ставке в приветствие
         if key_rate_data and key_rate_data.get('is_current'):
@@ -978,6 +1135,9 @@ async def inflation_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def metals_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_metal_rates(update, context)
 
+async def crypto_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_crypto_rates(update, context)
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_help(update, context)
 
@@ -987,13 +1147,14 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         greeting = f", {user.first_name}!" if user.first_name else "!"
         
         help_text = (
-            f"Привет{greeting} Я бот для отслеживания официальных данных ЦБ РФ!\n\n"
+            f"Привет{greeting} Я бот для отслеживания финансовых данных!\n\n"
             
-            "🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦЕНТРАЛЬНОГО БАНКА РОССИИ</b>\n\n"
+            "🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ</b>\n\n"
             
             "💱 <b>Основные команды:</b>\n"
             "• <code>/start</code> - главное меню\n"
             "• <code>/rates</code> - курсы валют ЦБ РФ с прогнозом на завтра\n"
+            "• <code>/crypto</code> - курсы криптовалют\n"
             "• <code>/keyrate</code> - ключевая ставка ЦБ РФ\n"
             "• <code>/inflation</code> - данные по инфляции\n"
             "• <code>/metals</code> - курсы драгоценных металлов\n"
@@ -1014,15 +1175,16 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             
             "📊 <b>Доступные разделы:</b>\n"
             "• <b>Курсы валют</b> - основные мировые валюты с прогнозом на завтра\n"
+            "• <b>Криптовалюты</b> - Bitcoin, Ethereum, Binance Coin и другие\n"
             "• <b>Ключевая ставка</b> - основная процентная ставка ЦБ РФ\n"
             "• <b>Инфляция</b> - текущий уровень инфляции\n"
             "• <b>Драгоценные металлы</b> - золото, серебро, платина, палладий\n\n"
             
             "💡 <b>ИНФОРМАЦИЯ</b>\n\n"
-            "• Все данные предоставляются через официальные источники ЦБ РФ\n"
+            "• Данные по ЦБ РФ предоставляются через официальные источники\n"
+            "• Курсы криптовалют предоставляются CoinGecko API\n"
             "• Курсы на завтра показываются только после публикации ЦБ РФ\n"
-            "• Ключевая ставка обновляется по решению Совета директоров\n"
-            "• Используются только официальные источники данных"
+            "• Используются только проверенные источники данных"
         )
         
         # Клавиатура с кнопкой "Назад"
@@ -1198,6 +1360,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             keyboard = [
                 [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
+                [InlineKeyboardButton("₿ Криптовалюты", callback_data='crypto_rates')],
                 [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
                 [InlineKeyboardButton("📊 Инфляция", callback_data='inflation')],
                 [InlineKeyboardButton("🥇 Драгоценные металлы", callback_data='metal_rates')],
@@ -1207,14 +1370,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                f'{greeting} Я бот для отслеживания официальных данных ЦБ РФ!\n\n'
-                '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦЕНТРАЛЬНОГО БАНКА РОССИИ</b>\n\n'
+                f'{greeting} Я бот для отслеживания финансовых данных!\n\n'
+                '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ</b>\n\n'
                 'Выберите раздел из меню ниже:',
                 parse_mode='HTML',
                 reply_markup=reply_markup
             )
         elif data == 'currency_rates':
             await show_currency_rates(update, context)
+        elif data == 'crypto_rates':
+            await show_crypto_rates(update, context)
         elif data == 'key_rate':
             await show_key_rate(update, context)
         elif data == 'inflation':
@@ -1286,6 +1451,7 @@ def main() -> None:
         application.add_handler(CommandHandler("keyrate", keyrate_command))
         application.add_handler(CommandHandler("inflation", inflation_command))
         application.add_handler(CommandHandler("metals", metals_command))
+        application.add_handler(CommandHandler("crypto", crypto_command))
         application.add_handler(CommandHandler("alert", alert_command))
         application.add_handler(CommandHandler("myalerts", myalerts_command))
         application.add_handler(CommandHandler("debug_alerts", debug_alerts_command))
