@@ -4,8 +4,10 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 from db import init_db, add_alert, update_user_info, get_all_users
 import os
-from datetime import datetime, time
+from datetime import datetime
 import asyncio
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -16,6 +18,9 @@ logger = logging.getLogger(__name__)
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
+
+# Глобальная переменная для хранения application
+application = None
 
 def get_cbr_rates() -> tuple[dict, str]:
     """Получает курсы валют от ЦБ РФ"""
@@ -189,9 +194,13 @@ async def show_cbr_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             await update.message.reply_text(error_msg, reply_markup=reply_markup)
 
-async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
+async def send_daily_rates():
     """Ежедневная отправка курсов ЦБ РФ всем пользователям"""
     try:
+        if application is None:
+            logger.error("Application не инициализирована для ежедневной рассылки")
+            return
+            
         logger.info("Начало ежедневной рассылки курсов ЦБ РФ")
         
         # Получаем курсы ЦБ РФ
@@ -218,7 +227,7 @@ async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
         success_count = 0
         for user in users:
             try:
-                await context.bot.send_message(
+                await application.bot.send_message(
                     chat_id=user['user_id'],
                     text=message,
                     parse_mode='HTML'
@@ -395,8 +404,11 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception as e:
         logger.error(f"Ошибка в обработчике неизвестных команд: {e}")
 
-async def post_init(application: Application) -> None:
+async def post_init(application_instance: Application) -> None:
     """Функция, выполняемая после инициализации бота"""
+    global application
+    application = application_instance
+    
     try:
         await init_db()
         logger.info("БД инициализирована успешно")
@@ -406,38 +418,37 @@ async def post_init(application: Application) -> None:
 def main() -> None:
     try:
         # Создаем и настраиваем application
-        application = Application.builder().token(TOKEN).post_init(post_init).build()
+        app = Application.builder().token(TOKEN).post_init(post_init).build()
 
         # Добавляем обработчики
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("stop", stop_command))
-        application.add_handler(CommandHandler("rates", rates))
-        application.add_handler(CommandHandler("cbr", cbr_rates_command))
-        application.add_handler(CommandHandler("alert", alert_command))
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("help", help_command))
+        app.add_handler(CommandHandler("stop", stop_command))
+        app.add_handler(CommandHandler("rates", rates))
+        app.add_handler(CommandHandler("cbr", cbr_rates_command))
+        app.add_handler(CommandHandler("alert", alert_command))
         
         # Обработчик для inline-кнопок
-        application.add_handler(CallbackQueryHandler(button_handler))
+        app.add_handler(CallbackQueryHandler(button_handler))
         
         # Обработчик для неизвестных команд
-        application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+        app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
-        # Настраиваем ежедневную рассылку в 10:00
-        job_queue = application.job_queue
-        
-        # Время в UTC (10:00 МСК = 07:00 UTC)
-        # Если Railway использует UTC, то устанавливаем 07:00
-        job_queue.run_daily(
+        # Настраиваем APScheduler для ежедневной рассылки
+        scheduler = AsyncIOScheduler()
+        # 10:00 МСК = 07:00 UTC
+        scheduler.add_job(
             send_daily_rates,
-            time=time(hour=7, minute=0, second=0),  # 07:00 UTC = 10:00 МСК
-            days=(0, 1, 2, 3, 4, 5, 6)  # Все дни недели
+            trigger=CronTrigger(hour=7, minute=0, timezone='UTC'),
+            id='daily_rates'
         )
+        scheduler.start()
         
         logger.info("Ежедневная рассылка настроена на 10:00 МСК (07:00 UTC)")
 
         # Запуск бота
         logger.info("Бот запускается...")
-        application.run_polling()
+        app.run_polling()
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
 
