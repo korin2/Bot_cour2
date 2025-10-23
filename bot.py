@@ -6,8 +6,6 @@ from db import init_db, add_alert, update_user_info, get_all_users
 import os
 from datetime import datetime
 import asyncio
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -18,10 +16,6 @@ logger = logging.getLogger(__name__)
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
-
-# Глобальная переменная для хранения application и scheduler
-application = None
-scheduler = None
 
 def get_cbr_rates() -> tuple[dict, str]:
     """Получает курсы валют от ЦБ РФ"""
@@ -195,13 +189,9 @@ async def show_cbr_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             await update.message.reply_text(error_msg, reply_markup=reply_markup)
 
-async def send_daily_rates():
+async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ежедневная отправка курсов ЦБ РФ всем пользователям"""
     try:
-        if application is None:
-            logger.error("Application не инициализирована для ежедневной рассылки")
-            return
-            
         logger.info("Начало ежедневной рассылки курсов ЦБ РФ")
         
         # Получаем курсы ЦБ РФ
@@ -228,7 +218,7 @@ async def send_daily_rates():
         success_count = 0
         for user in users:
             try:
-                await application.bot.send_message(
+                await context.bot.send_message(
                     chat_id=user['user_id'],
                     text=message,
                     parse_mode='HTML'
@@ -405,63 +395,53 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     except Exception as e:
         logger.error(f"Ошибка в обработчике неизвестных команд: {e}")
 
-async def setup_scheduler():
-    """Настройка планировщика для ежедневной рассылки"""
-    global scheduler
-    scheduler = AsyncIOScheduler()
-    # 10:00 МСК = 07:00 UTC
-    scheduler.add_job(
-        send_daily_rates,
-        trigger=CronTrigger(hour=7, minute=0, timezone='UTC'),
-        id='daily_rates'
-    )
-    scheduler.start()
-    logger.info("Ежедневная рассылка настроена на 10:00 МСК (07:00 UTC)")
-
-async def post_init(application_instance: Application) -> None:
+async def post_init(application: Application) -> None:
     """Функция, выполняемая после инициализации бота"""
-    global application
-    application = application_instance
-    
     try:
         await init_db()
         logger.info("БД инициализирована успешно")
-        
-        # Настраиваем планировщик после инициализации БД
-        await setup_scheduler()
     except Exception as e:
         logger.error(f"Ошибка при инициализации БД: {e}")
 
-async def main() -> None:
-    """Основная асинхронная функция для запуска бота"""
+def main() -> None:
+    """Основная функция для запуска бота"""
     try:
         # Создаем и настраиваем application
-        app = Application.builder().token(TOKEN).post_init(post_init).build()
+        application = Application.builder().token(TOKEN).post_init(post_init).build()
 
         # Добавляем обработчики
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("help", help_command))
-        app.add_handler(CommandHandler("stop", stop_command))
-        app.add_handler(CommandHandler("rates", rates))
-        app.add_handler(CommandHandler("cbr", cbr_rates_command))
-        app.add_handler(CommandHandler("alert", alert_command))
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("stop", stop_command))
+        application.add_handler(CommandHandler("rates", rates))
+        application.add_handler(CommandHandler("cbr", cbr_rates_command))
+        application.add_handler(CommandHandler("alert", alert_command))
         
         # Обработчик для inline-кнопок
-        app.add_handler(CallbackQueryHandler(button_handler))
+        application.add_handler(CallbackQueryHandler(button_handler))
         
         # Обработчик для неизвестных команд
-        app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+        application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+
+        # Настраиваем ежедневную рассылку в 10:00 (07:00 UTC)
+        job_queue = application.job_queue
+        
+        if job_queue:
+            # 10:00 МСК = 07:00 UTC
+            job_queue.run_daily(
+                send_daily_rates,
+                time=datetime.strptime("07:00", "%H:%M").time(),  # 07:00 UTC = 10:00 МСК
+                days=(0, 1, 2, 3, 4, 5, 6)  # Все дни недели
+            )
+            logger.info("Ежедневная рассылка настроена на 10:00 МСК (07:00 UTC)")
+        else:
+            logger.warning("JobQueue не доступен. Ежедневная рассылка не будет работать.")
 
         # Запуск бота
         logger.info("Бот запускается...")
-        await app.run_polling()
+        application.run_polling()
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
-    finally:
-        # Останавливаем планировщик при завершении работы бота
-        if scheduler and scheduler.running:
-            scheduler.shutdown()
 
 if __name__ == '__main__':
-    # Запускаем основную асинхронную функцию
-    asyncio.run(main())
+    main()
