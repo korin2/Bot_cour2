@@ -2,3 +2,4 @@ python-telegram-bot==21.0
 requests
 python-dotenv
 asyncpg
+beautifulsoup4
