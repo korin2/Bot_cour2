@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import asyncio
 import xml.etree.ElementTree as ET
 import json
+from bs4 import BeautifulSoup
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -22,26 +23,44 @@ if not TOKEN:
 # Базовый URL для официального API ЦБ РФ
 CBR_API_BASE = "https://www.cbr.ru/"
 
-def get_currency_rates():
-    """Получает курсы валют от ЦБ РФ через официальное API"""
+def get_currency_rates_with_change():
+    """Получает курсы валют от ЦБ РФ с динамикой изменения"""
     try:
-        # Используем API для ежедневных курсов валют
+        # Получаем данные за сегодня и за предыдущий день для сравнения
+        today = datetime.now()
+        yesterday = today - timedelta(days=1)
+        
+        # Форматируем даты для запроса
+        date_req_today = today.strftime('%d/%m/%Y')
+        date_req_yesterday = yesterday.strftime('%d/%m/%Y')
+        
+        # Получаем курсы за сегодня
         url = f"{CBR_API_BASE}scripts/XML_daily.asp"
+        params_today = {'date_req': date_req_today}
         
-        # Получаем текущую дату в формате DD/MM/YYYY
-        date_req = datetime.now().strftime('%d/%m/%Y')
-        params = {'date_req': date_req}
+        response_today = requests.get(url, params=params_today, timeout=10)
+        response_today.raise_for_status()
+        root_today = ET.fromstring(response_today.content)
         
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
+        # Получаем курсы за вчера для сравнения
+        params_yesterday = {'date_req': date_req_yesterday}
+        response_yesterday = requests.get(url, params=params_yesterday, timeout=10)
         
-        # Парсим XML ответ
-        root = ET.fromstring(response.content)
+        rates_yesterday = {}
+        if response_yesterday.status_code == 200:
+            root_yesterday = ET.fromstring(response_yesterday.content)
+            for valute in root_yesterday.findall('Valute'):
+                valute_id = valute.get('ID')
+                value = float(valute.find('Value').text.replace(',', '.'))
+                nominal = int(valute.find('Nominal').text)
+                if nominal > 1:
+                    value = value / nominal
+                rates_yesterday[valute_id] = value
         
         # Получаем дату из атрибута
-        cbr_date = root.get('Date', '')
+        cbr_date = root_today.get('Date', '')
         
-        # Получаем курсы валют
+        # Получаем курсы валют с изменением
         rates = {}
         currency_codes = {
             'R01235': 'USD',  # Доллар США
@@ -56,7 +75,7 @@ def get_currency_rates():
             'R01335': 'KZT',  # Казахстанский тенге
         }
         
-        for valute in root.findall('Valute'):
+        for valute in root_today.findall('Valute'):
             valute_id = valute.get('ID')
             if valute_id in currency_codes:
                 currency_code = currency_codes[valute_id]
@@ -68,10 +87,21 @@ def get_currency_rates():
                 if nominal > 1:
                     value = value / nominal
                 
+                # Рассчитываем изменение
+                change = 0
+                change_percent = 0
+                if valute_id in rates_yesterday:
+                    yesterday_value = rates_yesterday[valute_id]
+                    change = value - yesterday_value
+                    if yesterday_value > 0:
+                        change_percent = (change / yesterday_value) * 100
+                
                 rates[currency_code] = {
                     'value': value,
                     'name': name,
-                    'nominal': nominal
+                    'nominal': nominal,
+                    'change': change,
+                    'change_percent': change_percent
                 }
         
         return rates, cbr_date
@@ -81,38 +111,46 @@ def get_currency_rates():
         return {}, 'неизвестная дата'
 
 def get_key_rate():
-    """Получает ключевую ставку ЦБ РФ через официальное API"""
+    """Получает ключевую ставку ЦБ РФ через парсинг страницы"""
     try:
-        # API для ключевой ставки
-        url = f"{CBR_API_BASE}scripts/XML_keyRate.asp"
-        
+        url = "https://cbr.ru/hd_base/KeyRate/"
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         
-        # Парсим XML ответ
-        root = ET.fromstring(response.content)
+        # Используем BeautifulSoup для парсинга HTML
+        soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Берем самую последнюю запись (первую в списке)
-        records = root.findall('Record')
-        if records:
-            last_record = records[0]
-            rate_date = last_record.get('Date')
-            rate_value = float(last_record.find('Rate').text)
-            
-            # Преобразуем дату в формат DD.MM.YYYY
-            date_obj = datetime.strptime(rate_date, '%Y-%m-%d')
-            formatted_date = date_obj.strftime('%d.%m.%Y')
-            
-            key_rate_info = {
-                'rate': rate_value,
-                'date': formatted_date,
-                'is_current': True
-            }
-            
-            return key_rate_info
-        else:
-            logger.error("Не найдено записей о ключевой ставке")
-            return None
+        # Ищем таблицу с ключевыми ставками
+        table = soup.find('table', class_='data')
+        if table:
+            # Берем первую строку с данными (последнюю ставку)
+            rows = table.find_all('tr')
+            if len(rows) > 1:
+                # Первая строка - заголовки, вторая - последние данные
+                cells = rows[1].find_all('td')
+                if len(cells) >= 2:
+                    date_str = cells[0].get_text(strip=True)
+                    rate_str = cells[1].get_text(strip=True).replace(',', '.')
+                    
+                    # Преобразуем дату в нужный формат
+                    try:
+                        date_obj = datetime.strptime(date_str, '%d.%m.%Y')
+                        formatted_date = date_obj.strftime('%d.%m.%Y')
+                        rate_value = float(rate_str)
+                        
+                        key_rate_info = {
+                            'rate': rate_value,
+                            'date': formatted_date,
+                            'is_current': True,
+                            'source': 'cbr_parsed'
+                        }
+                        
+                        return key_rate_info
+                    except ValueError as e:
+                        logger.error(f"Ошибка парсинга даты или ставки: {e}")
+        
+        logger.error("Не удалось найти данные о ключевой ставке на странице")
+        return None
             
     except Exception as e:
         logger.error(f"Ошибка при получении ключевой ставки: {e}")
@@ -121,104 +159,67 @@ def get_key_rate():
 def get_inflation():
     """Получает данные по инфляции через официальное API ЦБ РФ"""
     try:
-        # API для получения данных по инфляции (ИПЦ - индекс потребительских цен)
         # Используем API для макроэкономических показателей
+        # Получаем данные по индексу потребительских цен (ИПЦ)
         today = datetime.now()
         
-        # Формируем даты для запроса (последние доступные данные)
-        # ЦБ РФ публикует данные по инфляции ежемесячно
-        current_year = today.year
-        current_month = today.month
-        
-        # Формируем URL для получения данных по ИПЦ
-        # Используем API для статистики
+        # Формируем URL для получения данных по инфляции
+        # Используем официальный API для статистики
         url = f"{CBR_API_BASE}statistics/macroinst/id/ipc"
         
-        # Альтернативный подход - парсим данные с официальной страницы
-        # или используем API для макроэкономических показателей
-        try:
-            # Попробуем получить данные через API статистики
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                # Здесь нужно парсить HTML или использовать другой endpoint
-                # Временно используем альтернативный подход
-                pass
-        except:
-            pass
-        
-        # Используем официальное API для получения данных по инфляции
-        # API для индекса потребительских цен
-        inflation_url = f"{CBR_API_BASE}statistics/PDV_1/GetPDV"
-        
-        # Параметры запроса - последний доступный период
-        params = {
-            'from': f'01.01.{current_year}',
-            'to': today.strftime('%d.%m.%Y'),
-            'PDV': 'ipc'  # Индекс потребительских цен
-        }
-        
-        try:
-            response = requests.get(inflation_url, params=params, timeout=10)
-            if response.status_code == 200:
-                # Парсим XML ответ
-                root = ET.fromstring(response.content)
-                
-                # Ищем последние данные по инфляции
-                # Структура может быть разной, поэтому ищем значения
-                inflation_values = []
-                for elem in root.iter():
-                    if elem.text and elem.text.replace('.', '').isdigit():
-                        try:
-                            value = float(elem.text)
-                            if 0 < value < 50:  # Реалистичные значения инфляции
-                                inflation_values.append(value)
-                        except:
-                            pass
-                
-                if inflation_values:
-                    # Берем последнее значение
-                    current_inflation = inflation_values[-1]
-                    
-                    inflation_data = {
-                        'current': current_inflation,
-                        'period': f'{current_year}',
-                        'source': 'cbr_official'
-                    }
-                    
-                    return inflation_data
-        except Exception as api_error:
-            logger.warning(f"Не удалось получить данные по инфляции через API: {api_error}")
-        
-        # Если не удалось получить через API, используем альтернативный источник
-        # ЦБ РФ публикует данные на своей странице статистики
-        try:
-            # URL страницы с данными по инфляции
-            stats_url = f"{CBR_API_BASE}statistics/macro_itm/inflation"
-            response = requests.get(stats_url, timeout=10)
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
             
-            if response.status_code == 200:
-                # Здесь нужно парсить HTML страницу
-                # Временно используем демо-данные, но с пометкой
-                logger.info("Используются демо-данные по инфляции (реальные данные требуют парсинга HTML)")
-                
-                # Демо-данные (в реальном приложении нужно реализовать парсинг)
+            # Ищем последние данные по инфляции на странице
+            # Обычно они находятся в таблицах или специальных блоках
+            inflation_value = None
+            
+            # Попробуем найти данные в таблицах
+            tables = soup.find_all('table')
+            for table in tables:
+                rows = table.find_all('tr')
+                for row in rows:
+                    cells = row.find_all('td')
+                    if len(cells) >= 2:
+                        cell_text = cells[0].get_text(strip=True).lower()
+                        if 'инфляция' in cell_text or 'ипц' in cell_text:
+                            value_text = cells[1].get_text(strip=True)
+                            try:
+                                # Извлекаем числовое значение
+                                import re
+                                numbers = re.findall(r'\d+[,.]\d+', value_text)
+                                if numbers:
+                                    inflation_value = float(numbers[0].replace(',', '.'))
+                                    break
+                            except ValueError:
+                                continue
+            
+            if inflation_value:
                 inflation_data = {
-                    'current': 7.4,
-                    'target': 4.0,
-                    'period': f'{current_year}',
-                    'source': 'demo_parsing_required'
+                    'current': inflation_value,
+                    'period': today.strftime('%Y'),
+                    'source': 'cbr_official'
                 }
-                
                 return inflation_data
-        except Exception as stats_error:
-            logger.warning(f"Не удалось получить данные по инфляции со страницы статистики: {stats_error}")
         
-        # Если все методы не сработали, возвращаем None
-        return None
+        # Если не удалось получить данные, возвращаем демо-данные с пометкой
+        logger.warning("Используются демо-данные по инфляции")
+        return {
+            'current': 7.4,
+            'target': 4.0,
+            'period': today.strftime('%Y'),
+            'source': 'demo'
+        }
         
     except Exception as e:
         logger.error(f"Ошибка при получении данных по инфляции: {e}")
-        return None
+        return {
+            'current': 7.4,
+            'target': 4.0,
+            'period': datetime.now().strftime('%Y'),
+            'source': 'demo_error'
+        }
 
 def get_metal_rates():
     """Получает курсы драгоценных металлов через API ЦБ РФ"""
@@ -236,27 +237,33 @@ def get_metal_rates():
         
         metal_rates = {}
         metals_map = {
-            '1': 'gold',
-            '2': 'silver', 
-            '3': 'platinum',
-            '4': 'palladium'
+            '1': {'name': 'gold', 'display': 'Золото'},
+            '2': {'name': 'silver', 'display': 'Серебро'}, 
+            '3': {'name': 'platinum', 'display': 'Платина'},
+            '4': {'name': 'palladium', 'display': 'Палладий'}
         }
         
         for record in root.findall('Record'):
             metal_code = record.get('Code')
             if metal_code in metals_map:
-                metal_name = metals_map[metal_code]
+                metal_info = metals_map[metal_code]
                 buy_price = float(record.find('Buy').text)
                 sell_price = float(record.find('Sell').text)
                 avg_price = (buy_price + sell_price) / 2
                 
-                metal_rates[metal_name] = avg_price
+                metal_rates[metal_info['name']] = {
+                    'price': avg_price,
+                    'display_name': metal_info['display'],
+                    'buy': buy_price,
+                    'sell': sell_price
+                }
         
         if metal_rates:
             metal_rates['update_date'] = datetime.now().strftime('%d.%m.%Y')
             metal_rates['source'] = 'cbr_official'
             return metal_rates
         else:
+            logger.error("Не найдено данных по металлам в ответе API")
             return None
             
     except Exception as e:
@@ -264,36 +271,46 @@ def get_metal_rates():
         return None
 
 def format_currency_rates_message(rates_data: dict, cbr_date: str) -> str:
-    """Форматирует сообщение с курсами валют"""
+    """Форматирует сообщение с курсами валют и динамикой"""
     if not rates_data:
         return "❌ Не удалось получить курсы валют от ЦБ РФ."
     
     message = f"💱 <b>КУРСЫ ВАЛЮТ ЦБ РФ</b>\n"
     message += f"📅 <i>на {cbr_date}</i>\n\n"
     
-    # Основные валюты (доллар, евро)
+    # Основные валюты (доллар, евро) с детальной информацией
     main_currencies = ['USD', 'EUR']
     for currency in main_currencies:
         if currency in rates_data:
             data = rates_data[currency]
+            change = data['change']
+            change_percent = data['change_percent']
+            
+            change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+            change_text = f"{change:+.2f} руб. ({change_percent:+.2f}%)" if change != 0 else "без изменений"
+            
             message += f"💵 <b>{data['name']}</b> ({currency}):\n"
-            message += f"   <b>{data['value']:.2f} руб.</b>\n\n"
+            message += f"   <b>{data['value']:.2f} руб.</b> {change_icon}\n"
+            message += f"   <i>Изменение: {change_text}</i>\n\n"
     
-    # Другие валюты
+    # Другие валюты с краткой информацией
     other_currencies = [curr for curr in rates_data.keys() if curr not in main_currencies]
     if other_currencies:
         message += "🌍 <b>Другие валюты:</b>\n"
         
         for currency in other_currencies:
             data = rates_data[currency]
+            change = data['change']
+            change_icon = "📈" if change > 0 else "📉" if change < 0 else "➡️"
+            
             # Для JPY показываем за 100 единиц
             if currency == 'JPY':
                 display_value = data['value'] * 100
-                message += f"   {data['name']} ({currency}): <b>{display_value:.2f} руб.</b>\n"
+                message += f"   {data['name']} ({currency}): <b>{display_value:.2f} руб.</b> {change_icon}\n"
             else:
-                message += f"   {data['name']} ({currency}): <b>{data['value']:.2f} руб.</b>\n"
+                message += f"   {data['name']} ({currency}): <b>{data['value']:.2f} руб.</b> {change_icon}\n"
     
-    message += f"\n💡 <i>Официальные курсы ЦБ РФ обновляются ежедневно</i>"
+    message += f"\n💡 <i>Официальные курсы ЦБ РФ с динамикой изменений</i>"
     return message
 
 def format_key_rate_message(key_rate_data: dict) -> str:
@@ -308,6 +325,9 @@ def format_key_rate_message(key_rate_data: dict) -> str:
     message += f"\n<b>Дата установления:</b> {key_rate_data.get('date', 'неизвестно')}\n\n"
     message += "💡 <i>Ключевая ставка - это основная процентная ставка ЦБ РФ,\n"
     message += "которая влияет на кредиты, депозиты и экономику в целом</i>"
+    
+    if key_rate_data.get('source') == 'cbr_parsed':
+        message += f"\n\n✅ <i>Данные получены с официального сайта ЦБ РФ</i>"
     
     return message
 
@@ -339,8 +359,10 @@ def format_inflation_message(inflation_data: dict) -> str:
     
     message += "\n💡 <i>Официальные данные по инфляции от ЦБ РФ</i>"
     
-    if source == 'demo_parsing_required':
-        message += f"\n\n⚠️ <i>Для получения реальных данных требуется настройка парсинга HTML страниц ЦБ РФ</i>"
+    if source == 'demo':
+        message += f"\n\n⚠️ <i>Используются демонстрационные данные</i>"
+    elif source == 'demo_error':
+        message += f"\n\n⚠️ <i>Используются демонстрационные данные (ошибка получения реальных)</i>"
     elif source == 'cbr_official':
         message += f"\n\n✅ <i>Данные получены через официальное API ЦБ РФ</i>"
     
@@ -353,27 +375,22 @@ def format_metal_rates_message(metal_rates: dict) -> str:
     
     message = f"🥇 <b>КУРСЫ ДРАГОЦЕННЫХ МЕТАЛЛОВ ЦБ РФ</b>\n\n"
     
-    metal_names = {
-        'gold': 'Золото',
-        'silver': 'Серебро', 
-        'platinum': 'Платина',
-        'palladium': 'Палладий'
-    }
+    # Сортируем металлы в определенном порядке
+    metal_order = ['gold', 'silver', 'platinum', 'palladium']
     
-    for metal_code, metal_name in metal_names.items():
+    for metal_code in metal_order:
         if metal_code in metal_rates:
-            price = metal_rates[metal_code]
-            message += f"<b>{metal_name}:</b> {price:.2f} руб/г\n"
+            data = metal_rates[metal_code]
+            message += f"<b>{data['display_name']}:</b> {data['price']:.2f} руб/г\n"
+            message += f"  <i>Покупка: {data['buy']:.2f} | Продажа: {data['sell']:.2f}</i>\n\n"
     
-    message += f"\n<i>Обновлено: {metal_rates.get('update_date', 'неизвестно')}</i>\n\n"
+    message += f"<i>Обновлено: {metal_rates.get('update_date', 'неизвестно')}</i>\n\n"
     message += "💡 <i>Официальные курсы для операций с драгоценными металлами</i>"
     
     if metal_rates.get('source') == 'cbr_official':
         message += f"\n\n✅ <i>Данные получены через официальное API ЦБ РФ</i>"
     
     return message
-
-# Все остальные функции остаются без изменений (start, show_currency_rates, show_key_rate, show_inflation, show_metal_rates, send_daily_rates, команды и обработчики)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /start"""
@@ -420,9 +437,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("❌ Произошла ошибка при запуске бота. Пожалуйста, попробуйте еще раз.")
 
 async def show_currency_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показывает курсы валют"""
+    """Показывает курсы валют с динамикой"""
     try:
-        rates_data, cbr_date = get_currency_rates()
+        rates_data, cbr_date = get_currency_rates_with_change()
         
         if not rates_data:
             error_msg = "❌ Не удалось получить курсы валют от ЦБ РФ. Попробуйте позже."
@@ -575,13 +592,14 @@ async def show_metal_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         else:
             await update.message.reply_text(error_msg, reply_markup=reply_markup)
 
+# Остальные функции без изменений (send_daily_rates, команды, обработчики)
 async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Ежедневная отправка основных данных ЦБ РФ всем пользователям"""
     try:
         logger.info("Начало ежедневной рассылки данных ЦБ РФ")
         
         # Получаем основные данные
-        rates_data, cbr_date = get_currency_rates()
+        rates_data, cbr_date = get_currency_rates_with_change()
         key_rate_data = get_key_rate()
         
         if not rates_data:
@@ -654,7 +672,7 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             
             "💱 <b>Основные команды:</b>\n"
             "• <code>/start</code> - главное меню\n"
-            "• <code>/rates</code> - курсы валют ЦБ РФ\n"
+            "• <code>/rates</code> - курсы валют ЦБ РФ с динамикой\n"
             "• <code>/keyrate</code> - ключевая ставка ЦБ РФ\n"
             "• <code>/inflation</code> - данные по инфляции\n"
             "• <code>/metals</code> - курсы драгоценных металлов\n"
@@ -667,14 +685,14 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "• Автоматическая отправка основных данных каждый день в 10:00\n\n"
             
             "📊 <b>Доступные разделы:</b>\n"
-            "• <b>Курсы валют</b> - основные мировые валюты\n"
+            "• <b>Курсы валют</b> - основные мировые валюты с динамикой изменений\n"
             "• <b>Ключевая ставка</b> - основная процентная ставка ЦБ РФ\n"
             "• <b>Инфляция</b> - текущий уровень инфляции\n"
             "• <b>Драгоценные металлы</b> - золото, серебро, платина, палладий\n\n"
             
             "💡 <b>ИНФОРМАЦИЯ</b>\n\n"
-            "• Все данные предоставляются через официальное API ЦБ РФ\n"
-            "• Курсы обновляются ежедневно\n"
+            "• Все данные предоставляются через официальные источники ЦБ РФ\n"
+            "• Курсы обновляются ежедневно с отображением динамики\n"
             "• Ключевая ставка обновляется по решению Совета директоров\n"
             "• Используются только официальные источники данных"
         )
