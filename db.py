@@ -92,13 +92,19 @@ async def get_user_alerts(user_id: int):
     try:
         conn = await asyncpg.connect(DATABASE_URL)
         alerts = await conn.fetch(
-            'SELECT * FROM alerts WHERE user_id = $1 AND is_active = TRUE ORDER BY created_at DESC', 
+            'SELECT * FROM alerts WHERE user_id = $1 ORDER BY created_at DESC', 
             user_id
         )
         await conn.close()
+        
+        # Логируем для отладки
+        print(f"Найдено уведомлений для user_id {user_id}: {len(alerts)}")
+        for alert in alerts:
+            print(f"Alert: {alert}")
+            
         return alerts
     except Exception as e:
-        print(f"Ошибка при получении уведомлений пользователя: {e}")
+        print(f"Ошибка при получении уведомлений пользователя {user_id}: {e}")
         return []
 
 async def remove_alert(alert_id: int):
