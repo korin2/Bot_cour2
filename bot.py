@@ -536,6 +536,65 @@ async def check_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         logger.error(f"Ошибка в функции проверки уведомлений: {e}")
 
+async def debug_alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отладочная команда для проверки уведомлений"""
+    try:
+        user_id = update.effective_user.id
+        logger.info(f"Отладочная проверка уведомлений для user_id: {user_id}")
+        
+        # Прямой запрос к базе для отладки
+        import asyncpg
+        conn = await asyncpg.connect(os.getenv('DATABASE_URL'))
+        
+        # Проверяем существование таблицы
+        table_exists = await conn.fetchval(
+            "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'alerts')"
+        )
+        logger.info(f"Таблица alerts существует: {table_exists}")
+        
+        # Проверяем все уведомления пользователя
+        alerts = await conn.fetch(
+            "SELECT * FROM alerts WHERE user_id = $1 ORDER BY id DESC",
+            user_id
+        )
+        
+        # Проверяем структуру таблицы
+        table_structure = await conn.fetch(
+            "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'alerts'"
+        )
+        
+        await conn.close()
+        
+        # Формируем отладочное сообщение
+        message = f"🔧 <b>ОТЛАДКА УВЕДОМЛЕНИЙ</b>\n\n"
+        message += f"<b>User ID:</b> {user_id}\n"
+        message += f"<b>Таблица существует:</b> {table_exists}\n\n"
+        
+        message += "<b>Структура таблицы alerts:</b>\n"
+        for col in table_structure:
+            message += f"  {col['column_name']} ({col['data_type']})\n"
+        
+        message += f"\n<b>Найдено уведомлений:</b> {len(alerts)}\n\n"
+        
+        for i, alert in enumerate(alerts, 1):
+            message += f"<b>Уведомление {i}:</b>\n"
+            for key, value in alert.items():
+                message += f"  {key}: {value}\n"
+            message += "\n"
+        
+        if not alerts:
+            message += "❌ Уведомлений не найдено в базе данных\n"
+            message += "💡 Проверьте:\n"
+            message += "1. Команда /alert выполнена корректно\n"
+            message += "2. База данных подключена\n"
+            message += "3. Таблица alerts создана\n"
+        
+        await update.message.reply_text(message, parse_mode='HTML')
+        
+    except Exception as e:
+        logger.error(f"Ошибка в отладочной команде: {e}")
+        await update.message.reply_text(f"❌ Ошибка отладки: {str(e)}")
+
 async def my_alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает активные уведомления пользователя"""
     try:
@@ -939,6 +998,7 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "• <code>/inflation</code> - данные по инфляции\n"
             "• <code>/metals</code> - курсы драгоценных металлов\n"
             "• <code>/myalerts</code> - мои активные уведомления\n"
+            "• <code>/debug_alerts</code> - отладка уведомлений\n"
             "• <code>/help</code> - эта справка\n\n"
             
             "🔔 <b>Уведомления:</b>\n"
@@ -1165,9 +1225,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await my_alerts_command(update, context)
         elif data == 'clear_all_alerts':
             await clear_all_alerts_handler(update, context)
-    except Exception as e:
-        logger.error(f"Ошибка в обработчике кнопок: {e}")
-        # В button_handler добавьте:
         elif data == 'create_alert':
             # Показываем инструкцию по созданию уведомления
             help_text = (
@@ -1188,7 +1245,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await update.callback_query.edit_message_text(help_text, parse_mode='HTML', reply_markup=reply_markup)
+            await query.edit_message_text(help_text, parse_mode='HTML', reply_markup=reply_markup)
+            
+    except Exception as e:
+        logger.error(f"Ошибка в обработчике кнопок: {e}")
+
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         # Клавиатура с кнопкой "Назад"
@@ -1227,6 +1288,7 @@ def main() -> None:
         application.add_handler(CommandHandler("metals", metals_command))
         application.add_handler(CommandHandler("alert", alert_command))
         application.add_handler(CommandHandler("myalerts", myalerts_command))
+        application.add_handler(CommandHandler("debug_alerts", debug_alerts_command))
         
         # Обработчик для inline-кнопок
         application.add_handler(CallbackQueryHandler(button_handler))
