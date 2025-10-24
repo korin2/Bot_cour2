@@ -358,7 +358,11 @@ async def myalerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+            # Используем правильный метод для отправки сообщения
+            if update.message:
+                await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+            else:
+                await update.effective_message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
             return
         
         message = "🔔 <b>ВАШИ АКТИВНЫЕ УВЕДОМЛЕНИЯ</b>\n\n"
@@ -392,15 +396,21 @@ async def myalerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        # Используем правильный метод для отправки сообщения
+        if update.message:
+            await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            await update.effective_message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
         
     except Exception as e:
         logger.error(f"Ошибка в команде /myalerts: {e}")
-        await update.message.reply_text(
-            "❌ <b>Ошибка при получении уведомлений.</b>",
-            parse_mode='HTML',
-            reply_markup=create_back_button()
-        )
+        error_message = "❌ <b>Ошибка при получении уведомлений.</b>"
+        
+        # Используем правильный метод для отправки сообщения об ошибке
+        if update.message:
+            await update.message.reply_text(error_message, parse_mode='HTML', reply_markup=create_back_button())
+        else:
+            await update.effective_message.reply_text(error_message, parse_mode='HTML', reply_markup=create_back_button())
 
 async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает главное меню"""
