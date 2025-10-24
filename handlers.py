@@ -9,6 +9,7 @@ from services import (
 )
 from utils import split_long_message, create_back_button
 from db import get_user_alerts, clear_user_alerts, remove_alert, add_alert, update_user_info
+from services import get_weather_moscow, format_weather_message
 
 # Основные команды
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -198,6 +199,11 @@ async def show_other_functions(update: Update, context: ContextTypes.DEFAULT_TYP
             "🔧 <b>ПРОЧИЕ ФУНКЦИИ</b>\n\n"
             "Выберите дополнительную функцию:\n\n"
             
+            "🌤️ <b>Погода:</b>\n"
+            "• Текущая погода в Москве\n"
+            "• Ежедневная рассылка погоды\n"
+            "• Рекомендации по одежде\n\n"
+            
             "📊 <b>Аналитика:</b>\n"
             "• Статистика использования бота\n"
             "• Графики изменения курсов\n"
@@ -213,10 +219,11 @@ async def show_other_functions(update: Update, context: ContextTypes.DEFAULT_TYP
             "• Связь с разработчиком\n"
             "• Отзывы и предложения\n\n"
             
-            "💡 <i>Эти функции находятся в разработке и будут добавлены в будущих обновлениях</i>"
+            "💡 <i>Новые функции добавляются регулярно!</i>"
         )
         
         keyboard = [
+            [InlineKeyboardButton("🌤️ Погода в Москве", callback_data='weather')],
             [InlineKeyboardButton("📊 Статистика", callback_data='stats')],
             [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')],
             [InlineKeyboardButton("ℹ️ О боте", callback_data='about')],
@@ -344,7 +351,14 @@ async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             
             "🔔 <b>Уведомления:</b>\n"
             "• Ежедневная рассылка: <b>Включено</b>\n"
+            "• Погода: <b>Включено</b>\n"
+            "• Курсы валют: <b>Включено</b>\n"
             "• Проверка уведомлений: <b>Каждые 30 минут</b>\n\n"
+            
+            "🌤️ <b>Погода:</b>\n"
+            "• Город: <b>Москва</b>\n"
+            "• Ежедневная рассылка: <b>08:00</b>\n"
+            "• Единицы измерения: <b>°C, м/с</b>\n\n"
             
             "🌍 <b>Региональные настройки:</b>\n"
             "• Часовой пояс: <b>Москва (UTC+3)</b>\n"
@@ -657,6 +671,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await myalerts_command(update, context)
         elif data == 'other_functions':
             await show_other_functions(update, context)
+        elif data == 'weather':
+            await show_weather(update, context)
         elif data == 'stats':
             await show_bot_stats(update, context)
         elif data == 'about':
@@ -730,3 +746,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     except Exception as e:
         logger.error(f"Ошибка в обработчике кнопок: {e}")
+
+# Добавьте новую функцию
+async def show_weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает текущую погоду в Москве"""
+    try:
+        # Показываем сообщение о загрузке
+        loading_message = "🔄 <b>Загружаем данные о погоде...</b>"
+        await update.effective_message.reply_text(loading_message, parse_mode='HTML', reply_markup=create_back_button())
+        
+        # Получаем данные о погоде
+        weather_data = get_weather_moscow()
+        message = format_weather_message(weather_data)
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Обновить", callback_data='weather')],
+            [InlineKeyboardButton("🔧 Прочие функции", callback_data='other_functions')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.effective_message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при показе погоды: {e}")
+        await update.effective_message.reply_text(
+            "❌ Ошибка при получении данных о погоде.",
+            reply_markup=create_back_button()
+        )
