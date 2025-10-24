@@ -4,3 +4,5 @@ python-dotenv==1.0.0
 asyncpg==0.29.0
 beautifulsoup4==4.12.2
 lxml==4.9.3
+psutil==5.9.6
+aiohttp==3.9.1
