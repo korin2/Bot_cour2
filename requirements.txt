@@ -1,6 +1,6 @@
 python-telegram-bot==21.0
-requests
-python-dotenv
-asyncpg
-beautifulsoup4
-lxml
+requests==2.31.0
+python-dotenv==1.0.0
+asyncpg==0.29.0
+beautifulsoup4==4.12.2
+lxml==4.9.3
