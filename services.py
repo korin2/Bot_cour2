@@ -4,7 +4,6 @@ import json
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import logging
-import re
 from config import CBR_API_BASE, COINGECKO_API_BASE, DEEPSEEK_API_BASE, DEEPSEEK_API_KEY, logger
 from telegram.ext import ContextTypes
 
@@ -292,203 +291,8 @@ def get_key_rate_demo():
         'source': 'demo'
     }
 
-def get_meeting_dates():
-    """Парсит даты заседаний Совета директоров ЦБ РФ по ключевой ставке"""
-    try:
-        urls = [
-            "https://cbr.ru/dkp/cal_mp/",  # Основная страница
-        ]
-        
-        meeting_dates = []
-        
-        for url in urls:
-            try:
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-                    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-                    'Referer': 'https://www.cbr.ru/',
-                }
-                
-                logger.info(f"Пытаемся получить данные с {url}")
-                response = requests.get(url, headers=headers, timeout=20)
-                
-                if response.status_code != 200:
-                    logger.warning(f"Не удалось загрузить страницу {url}, статус: {response.status_code}")
-                    continue
-                
-                soup = BeautifulSoup(response.content, 'html.parser')
-                logger.info(f"Страница загружена, ищем данные...")
-                
-                # Метод 1: Ищем в таблицах
-                tables = soup.find_all('table')
-                logger.info(f"Найдено таблиц: {len(tables)}")
-                
-                for i, table in enumerate(tables):
-                    rows = table.find_all('tr')
-                    for row in rows:
-                        cells = row.find_all(['td', 'th'])
-                        row_text = ' '.join([cell.get_text(strip=True) for cell in cells])
-                        
-                        # Ищем строки с заседаниями
-                        if any(keyword in row_text.lower() for keyword in [
-                            'заседание совета директоров', 
-                            'ключевая ставка',
-                            'совет директоров цб',
-                            'заседание цб'
-                        ]):
-                            # Пытаемся извлечь дату
-                            date_match = re.search(r'(\d{1,2}\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s+\d{4})', row_text)
-                            if date_match:
-                                date_text = date_match.group(1)
-                                parsed_date = parse_russian_date(date_text)
-                                if parsed_date and parsed_date > datetime.now():
-                                    meeting_dates.append({
-                                        'date_obj': parsed_date,
-                                        'date_str': date_text,
-                                        'formatted_date': parsed_date.strftime('%d.%m.%Y')
-                                    })
-                                    logger.info(f"Найдено заседание: {date_text}")
-                
-                # Метод 2: Ищем по всему тексту страницы
-                page_text = soup.get_text()
-                date_pattern = r'(\d{1,2}\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s+\d{4})'
-                dates = re.findall(date_pattern, page_text)
-                
-                # Фильтруем только будущие даты
-                for date_text in dates:
-                    parsed_date = parse_russian_date(date_text)
-                    if parsed_date and parsed_date > datetime.now():
-                        # Проверяем контекст - ищем упоминания о заседаниях рядом с датой
-                        context_start = max(0, page_text.find(date_text) - 100)
-                        context_end = min(len(page_text), page_text.find(date_text) + 100)
-                        context = page_text[context_start:context_end].lower()
-                        
-                        if any(keyword in context for keyword in [
-                            'заседание', 'совет директоров', 'цб', 'банк россии', 'ключевая'
-                        ]):
-                            meeting_dates.append({
-                                'date_obj': parsed_date,
-                                'date_str': date_text,
-                                'formatted_date': parsed_date.strftime('%d.%m.%Y')
-                            })
-                            logger.info(f"Найдено заседание (по контексту): {date_text}")
-                
-            except Exception as e:
-                logger.error(f"Ошибка при парсинге {url}: {e}")
-                continue
-        
-        # Если не нашли данные через парсинг, используем запасной вариант
-        if not meeting_dates:
-            logger.info("Не удалось найти данные через парсинг, используем запасные данные")
-            return get_fallback_meeting_dates()
-        
-        # Сортируем по дате и убираем дубликаты
-        unique_dates = {}
-        for meeting in meeting_dates:
-            date_key = meeting['formatted_date']
-            if date_key not in unique_dates:
-                unique_dates[date_key] = meeting
-        
-        sorted_meetings = sorted(unique_dates.values(), key=lambda x: x['date_obj'])
-        
-        # Ограничиваем количество выводимых дат (ближайшие 6)
-        return sorted_meetings[:6]
-        
-    except Exception as e:
-        logger.error(f"Общая ошибка при получении дат заседаний: {e}")
-        return get_fallback_meeting_dates()
-
-def get_fallback_meeting_dates():
-    """Запасные данные о заседаниях ЦБ РФ"""
-    try:
-        # Стандартные даты заседаний ЦБ РФ (примерные)
-        current_year = datetime.now().year
-        next_year = current_year + 1
-        
-        # Типичные даты заседаний (примерные, основанные на исторических данных)
-        typical_dates = [
-            f"15 января {current_year} года",
-            f"12 февраля {current_year} года", 
-            f"15 марта {current_year} года",
-            f{26} апреля {current_year} года",
-            f"14 июня {current_year} года",
-            f"26 июля {current_year} года",
-            f{13} сентября {current_year} года",
-            f"25 октября {current_year} года",
-            f"13 декабря {current_year} года",
-            f"14 февраля {next_year} года",
-            f"18 апреля {next_year} года",
-            f"13 июня {next_year} года"
-        ]
-        
-        meeting_dates = []
-        for date_text in typical_dates:
-            parsed_date = parse_russian_date(date_text)
-            if parsed_date and parsed_date > datetime.now():
-                meeting_dates.append({
-                    'date_obj': parsed_date,
-                    'date_str': date_text,
-                    'formatted_date': parsed_date.strftime('%d.%m.%Y')
-                })
-        
-        # Сортируем и берем ближайшие 6
-        sorted_meetings = sorted(meeting_dates, key=lambda x: x['date_obj'])
-        return sorted_meetings[:6]
-        
-    except Exception as e:
-        logger.error(f"Ошибка в запасных данных: {e}")
-        return []
-
-def parse_russian_date(date_text):
-    """Парсит русскую дату в объект datetime"""
-    try:
-        # Словарь для преобразования месяцев
-        months = {
-            'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4,
-            'мая': 5, 'июня': 6, 'июля': 7, 'августа': 8,
-            'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
-        }
-        
-        # Убираем "года" и лишние пробелы
-        date_text = date_text.replace('года', '').strip()
-        
-        # Разбиваем на части
-        parts = date_text.split()
-        if len(parts) >= 3:
-            day = int(parts[0])
-            month_str = parts[1].lower()
-            year = int(parts[2])
-            
-            if month_str in months:
-                month = months[month_str]
-                return datetime(year, month, day)
-        
-        return None
-        
-    except Exception as e:
-        logger.error(f"Ошибка парсинга даты '{date_text}': {e}")
-        return None
-
-def get_key_rate_with_meetings():
-    """Получает ключевую ставку и даты заседаний"""
-    try:
-        key_rate_data = get_key_rate()
-        meeting_dates = get_meeting_dates()
-        
-        return {
-            'key_rate': key_rate_data,
-            'meetings': meeting_dates
-        }
-    except Exception as e:
-        logger.error(f"Ошибка в get_key_rate_with_meetings: {e}")
-        return {
-            'key_rate': get_key_rate(),
-            'meetings': []
-        }
-
-def format_key_rate_message(key_rate_data: dict, meeting_dates: list = None) -> str:
-    """Форматирует сообщение с ключевой ставкой и датами заседаний"""
+def format_key_rate_message(key_rate_data: dict) -> str:
+    """Форматирует сообщение с ключевой ставкой"""
     if not key_rate_data:
         return "❌ Не удалось получить данные по ключевой ставке от ЦБ РФ."
     
@@ -497,17 +301,7 @@ def format_key_rate_message(key_rate_data: dict, meeting_dates: list = None) -> 
     
     message = f"💎 <b>КЛЮЧЕВАЯ СТАВКА ЦБ РФ</b>\n\n"
     message += f"<b>Текущее значение:</b> {rate:.2f}%\n"
-    message += f"<b>Дата установления:</b> {key_rate_data.get('date', 'неизвестно')}\n\n"
-    
-    # Добавляем информацию о заседаниях
-    if meeting_dates:
-        message += "<b>Следующие заседания ЦБ РФ:</b>\n"
-        for i, meeting in enumerate(meeting_dates, 1):
-            message += f"• {meeting['date_str']}\n"
-        message += "\n"
-    else:
-        message += "<i>Информация о датах заседаний временно недоступна</i>\n\n"
-    
+    message += f"\n<b>Дата установления:</b> {key_rate_data.get('date', 'неизвестно')}\n\n"
     message += "💡 <i>Ключевая ставка - это основная процентная ставка ЦБ РФ,\n"
     message += "которая влияет на кредиты, депозиты и экономику в целом</i>"
     
@@ -520,7 +314,6 @@ def format_key_rate_message(key_rate_data: dict, meeting_dates: list = None) -> 
         message += f"\n\n⚠️ <i>Используются демонстрационные данные (ошибка получения реальных)</i>"
     
     return message
-
 
 # =============================================================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С КРИПТОВАЛЮТАМИ
@@ -549,14 +342,17 @@ def get_crypto_rates():
         }
         
         logger.info(f"Запрос к CoinGecko API: {url}")
+        logger.info(f"Параметры: {params}")
         
         response = requests.get(url, params=params, headers=headers, timeout=15)
         
         if response.status_code != 200:
             logger.error(f"Ошибка CoinGecko API: {response.status_code}")
+            logger.error(f"Текст ответа: {response.text}")
             return None
             
         data = response.json()
+        logger.info(f"Получены данные от CoinGecko: {type(data)}")
         
         # Проверяем структуру ответа
         if not isinstance(data, dict):
@@ -618,6 +414,8 @@ def get_crypto_rates():
                     'last_updated': crypto_data.get('last_updated_at', 0)
                 }
                 valid_count += 1
+            else:
+                logger.warning(f"Криптовалюта {crypto_id} не найдена в ответе API")
         
         logger.info(f"Успешно обработано {valid_count} криптовалют")
         
@@ -667,6 +465,22 @@ def get_crypto_rates_fallback():
                 'price_usd': 380.0,
                 'change_24h': -0.5,
                 'last_updated': datetime.now().timestamp()
+            },
+            'ripple': {
+                'name': 'XRP',
+                'symbol': 'XRP',
+                'price_rub': 60.0,
+                'price_usd': 0.65,
+                'change_24h': 0.8,
+                'last_updated': datetime.now().timestamp()
+            },
+            'cardano': {
+                'name': 'Cardano',
+                'symbol': 'ADA',
+                'price_rub': 45.0,
+                'price_usd': 0.48,
+                'change_24h': -1.2,
+                'last_updated': datetime.now().timestamp()
             }
         }
         
@@ -687,8 +501,8 @@ def format_crypto_rates_message(crypto_rates: dict) -> str:
     
     message = f"₿ <b>КУРСЫ КРИПТОВАЛЮТ</b>\n\n"
     
-    # Основные криптовалюты
-    main_cryptos = ['bitcoin', 'ethereum', 'binancecoin']
+    # Основные криптовалюты (первые 5)
+    main_cryptos = ['bitcoin', 'ethereum', 'binancecoin', 'ripple', 'cardano']
     
     for crypto_id in main_cryptos:
         if crypto_id in crypto_rates:
@@ -716,6 +530,31 @@ def format_crypto_rates_message(crypto_rates: dict) -> str:
                 f"   💰 <b>{price_rub:,.0f} руб.</b>\n"
                 f"   💵 {price_usd:,.2f} $\n"
                 f"   {change_icon} <i>{change_24h:+.2f}% (24ч)</i>\n\n"
+            )
+    
+    # Остальные криптовалюты
+    other_cryptos = [crypto_id for crypto_id in crypto_rates.keys() 
+                    if crypto_id not in main_cryptos and crypto_id not in ['update_time', 'source']]
+    
+    if other_cryptos:
+        message += "🔹 <b>Другие криптовалюты:</b>\n"
+        
+        for crypto_id in other_cryptos:
+            data = crypto_rates[crypto_id]
+            symbol = data.get('symbol', 'N/A')
+            price_rub = data.get('price_rub', 0)
+            change_24h = data.get('change_24h', 0)
+            
+            try:
+                price_rub = float(price_rub)
+                change_24h = float(change_24h)
+            except (TypeError, ValueError):
+                continue
+            
+            change_icon = "📈" if change_24h > 0 else "📉" if change_24h < 0 else "➡️"
+            
+            message += (
+                f"   <b>{symbol}</b>: {price_rub:,.0f} руб. {change_icon}\n"
             )
     
     message += f"\n<i>Обновлено: {crypto_rates.get('update_time', 'неизвестно')}</i>\n\n"
@@ -764,7 +603,7 @@ async def ask_deepseek(prompt: str, context: ContextTypes.DEFAULT_TYPE = None) -
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7,
-            "max_tokens": 2000,
+            "max_tokens": 2000,  # Увеличим лимит токенов для более подробных ответов
             "stream": False
         }
         

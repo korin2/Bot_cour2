@@ -1,5 +1,5 @@
 import logging
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import InlineKeyboardMarkup
 
 logger = logging.getLogger(__name__)
 
@@ -29,4 +29,5 @@ async def split_long_message(text: str, max_length: int = 4096) -> list:
 
 def create_back_button():
     """Создает кнопку 'Назад в меню'"""
+    from telegram import InlineKeyboardButton
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]])
