@@ -4,6 +4,7 @@ import json
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import logging
+import re
 from config import CBR_API_BASE, COINGECKO_API_BASE, DEEPSEEK_API_BASE, DEEPSEEK_API_KEY, logger
 from telegram.ext import ContextTypes
 
@@ -291,8 +292,8 @@ def get_key_rate_demo():
         'source': 'demo'
     }
 
-def format_key_rate_message(key_rate_data: dict) -> str:
-    """Форматирует сообщение с ключевой ставкой"""
+def format_key_rate_message(key_rate_data: dict, meeting_dates: list = None) -> str:
+    """Форматирует сообщение с ключевой ставкой и датами заседаний"""
     if not key_rate_data:
         return "❌ Не удалось получить данные по ключевой ставке от ЦБ РФ."
     
@@ -301,7 +302,15 @@ def format_key_rate_message(key_rate_data: dict) -> str:
     
     message = f"💎 <b>КЛЮЧЕВАЯ СТАВКА ЦБ РФ</b>\n\n"
     message += f"<b>Текущее значение:</b> {rate:.2f}%\n"
-    message += f"\n<b>Дата установления:</b> {key_rate_data.get('date', 'неизвестно')}\n\n"
+    message += f"<b>Дата установления:</b> {key_rate_data.get('date', 'неизвестно')}\n\n"
+    
+    # Добавляем информацию о заседаниях
+    if meeting_dates:
+        message += "<b>Следующие заседания ЦБ РФ:</b>\n"
+        for i, meeting in enumerate(meeting_dates, 1):
+            message += f"• {meeting['date_str']}\n"
+        message += "\n"
+    
     message += "💡 <i>Ключевая ставка - это основная процентная ставка ЦБ РФ,\n"
     message += "которая влияет на кредиты, депозиты и экономику в целом</i>"
     
@@ -314,6 +323,117 @@ def format_key_rate_message(key_rate_data: dict) -> str:
         message += f"\n\n⚠️ <i>Используются демонстрационные данные (ошибка получения реальных)</i>"
     
     return message
+
+# парсинг дат заседания ЦБ
+
+def get_meeting_dates():
+    """Парсит даты заседаний Совета директоров ЦБ РФ по ключевой ставке"""
+    try:
+        urls = [
+            "https://cbr.ru/dkp/cal_mp/#t12",  # 2025 год
+            "https://cbr.ru/dkp/cal_mp/#t13"   # 2026 год
+        ]
+        
+        meeting_dates = []
+        
+        for url in urls:
+            try:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+                }
+                
+                response = requests.get(url, headers=headers, timeout=15)
+                
+                if response.status_code != 200:
+                    logger.warning(f"Не удалось загрузить страницу {url}, статус: {response.status_code}")
+                    continue
+                
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Ищем все строки таблицы
+                rows = soup.find_all('tr')
+                
+                for row in rows:
+                    cells = row.find_all('td')
+                    if len(cells) >= 2:
+                        # Проверяем, содержит ли ячейка описание заседания
+                        meeting_text = cells[1].get_text(strip=True)
+                        if "Заседание Совета директоров Банка России по ключевой ставке" in meeting_text:
+                            date_text = cells[0].get_text(strip=True)
+                            if date_text:
+                                # Парсим дату
+                                parsed_date = parse_russian_date(date_text)
+                                if parsed_date and parsed_date > datetime.now():
+                                    meeting_dates.append({
+                                        'date_obj': parsed_date,
+                                        'date_str': date_text,
+                                        'formatted_date': parsed_date.strftime('%d.%m.%Y')
+                                    })
+                
+                logger.info(f"Найдено {len([d for d in meeting_dates if url in d.get('source', '')])} заседаний на {url}")
+                
+            except Exception as e:
+                logger.error(f"Ошибка при парсинге {url}: {e}")
+                continue
+        
+        # Сортируем по дате и убираем дубликаты
+        unique_dates = {}
+        for meeting in meeting_dates:
+            date_key = meeting['formatted_date']
+            if date_key not in unique_dates:
+                unique_dates[date_key] = meeting
+        
+        sorted_meetings = sorted(unique_dates.values(), key=lambda x: x['date_obj'])
+        
+        # Ограничиваем количество выводимых дат (например, ближайшие 6)
+        return sorted_meetings[:6]
+        
+    except Exception as e:
+        logger.error(f"Общая ошибка при получении дат заседаний: {e}")
+        return []
+
+def parse_russian_date(date_text):
+    """Парсит русскую дату в объект datetime"""
+    try:
+        # Словарь для преобразования месяцев
+        months = {
+            'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4,
+            'мая': 5, 'июня': 6, 'июля': 7, 'августа': 8,
+            'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12
+        }
+        
+        # Убираем "года" и лишние пробелы
+        date_text = date_text.replace('года', '').strip()
+        
+        # Разбиваем на части
+        parts = date_text.split()
+        if len(parts) >= 3:
+            day = int(parts[0])
+            month_str = parts[1]
+            year = int(parts[2])
+            
+            if month_str in months:
+                month = months[month_str]
+                return datetime(year, month, day)
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Ошибка парсинга даты '{date_text}': {e}")
+        return None
+
+def get_key_rate_with_meetings():
+    """Получает ключевую ставку и даты заседаний"""
+    key_rate_data = get_key_rate()
+    meeting_dates = get_meeting_dates()
+    
+    return {
+        'key_rate': key_rate_data,
+        'meetings': meeting_dates
+    }
+
 
 # =============================================================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С КРИПТОВАЛЮТАМИ
