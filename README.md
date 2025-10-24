@@ -15,45 +15,46 @@
 
 ```
 telegram-finance-bot/
-├── bot/                           # Основной пакет бота
+.
+├── bot/
 │   ├── __init__.py
-│   ├── __main__.py               # Точка входа для запуска как модуля
-│   ├── main.py                   # Основной файл запуска бота
-│   ├── config.py                 # Конфигурация и константы
-│   ├── handlers/                 # Обработчики сообщений и команд
+│   ├── __main__.py
+│   ├── main.py
+│   ├── config.py
+│   ├── db.py
+│   ├── handlers/
 │   │   ├── __init__.py
-│   │   ├── commands.py           # Основные команды (/start, /help, /stop)
-│   │   ├── currency.py           # Курсы валют
-│   │   ├── crypto.py             # Криптовалюты
-│   │   ├── key_rate.py           # Ключевая ставка
-│   │   ├── ai_chat.py            # ИИ функционал
-│   │   ├── alerts.py             # Уведомления
-│   │   ├── callbacks.py          # Обработчики callback'ов
-│   │   ├── messages.py           # Обработчики текстовых сообщений
-│   │   └── keyboards.py          # Клавиатуры
-│   ├── services/                 # Сервисы для работы с API
+│   │   ├── commands.py
+│   │   ├── currency.py
+│   │   ├── crypto.py
+│   │   ├── key_rate.py
+│   │   ├── ai_chat.py
+│   │   ├── alerts.py
+│   │   ├── callbacks.py
+│   │   ├── messages.py
+│   │   └── keyboards.py
+│   ├── services/
 │   │   ├── __init__.py
-│   │   ├── cbr_api.py            # API ЦБ РФ
-│   │   ├── coingecko_api.py      # API CoinGecko
-│   │   └── deepseek_api.py       # API DeepSeek
-│   ├── utils/                    # Вспомогательные утилиты
-│   │   ├── __init__.py
-│   │   ├── formatters.py         # Форматирование сообщений
-│   │   └── helpers.py            # Вспомогательные функции
-│   └── jobs/                     # Фоновые задачи
-│       ├── __init__.py
-│       └── alerts.py             # Проверка уведомлений и рассылка
-├── db.py                         # Работа с базой данных
-├── requirements.txt              # Зависимости Python
-├── start.sh                     # Скрипт запуска для Railpack
-├── railpack.toml                # Конфигурация Railpack
-├── setup.py                     # Установка как пакета
-├── Procfile                     # Конфигурация для Heroku-like платформ
-├── runtime.txt                  # Версия Python
-├── run.py                       # Альтернативная точка входа
-├── wsgi.py                      # WSGI точка входа
-├── .gitignore                   # Игнорируемые файлы
-└── README.md                    # Эта документация
+│   │   ├── cbr_api.py
+│   │   ├── coingecko_api.py      # Новый файл
+│   │   └── deepseek_api.py       # Новый файл
+│   ├── utils/
+│   │   ├── __init__.py           # Новый файл
+│   │   ├── formatters.py         # Новый файл
+│   │   └── helpers.py            # Новый файл
+│   └── jobs/
+│       ├── __init__.py           # Новый файл
+│       └── alerts.py
+├── requirements.txt
+├── start.sh
+├── railpack.toml
+├── setup.py
+├── Procfile
+├── runtime.txt
+├── run.py
+├── wsgi.py
+├── .gitignore
+└── README.md
 ```
 
 ## Детальное описание модулей
