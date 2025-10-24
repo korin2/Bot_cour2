@@ -1,11 +1,11 @@
 import os
 import sys
 import logging
+import asyncio
+from telegram.ext import Application
 
 # Добавляем корневую директорию в путь для импортов
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from telegram.ext import Application
 
 from bot.config import TOKEN, logger
 from bot.handlers.commands import setup_commands
@@ -17,9 +17,7 @@ from bot.handlers.key_rate import setup_key_rate_handlers
 from bot.handlers.ai_chat import setup_ai_handlers
 from bot.handlers.alerts import setup_alerts_handlers
 from bot.jobs.alerts import setup_jobs
-from bot.db import init_db  # Измененный импорт
-
-# ... остальной код без изменений ...
+from bot.db import init_db
 
 async def post_init(application: Application) -> None:
     """Функция, выполняемая после инициализации бота"""
@@ -48,14 +46,34 @@ def setup_application():
     
     return application
 
-def main() -> None:
-    """Основная функция для запуска бота"""
+async def main_async() -> None:
+    """Асинхронная основная функция для запуска бота"""
     try:
         application = setup_application()
         
-        # Запуск бота
+        # Запуск бота с обработкой конфликтов
         logger.info("Бот запускается...")
-        application.run_polling()
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(
+            drop_pending_updates=True,  # Удаляем pending updates при запуске
+            allowed_updates=['message', 'callback_query']
+        )
+        
+        # Бесконечный цикл
+        await asyncio.Event().wait()
+        
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
+        raise
+
+def main() -> None:
+    """Основная функция для запуска бота"""
+    try:
+        # Запускаем асинхронную основную функцию
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        logger.info("Бот остановлен пользователем")
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
         sys.exit(1)
