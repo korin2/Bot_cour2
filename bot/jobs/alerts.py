@@ -1,18 +1,14 @@
 import logging
-import os
-import sys
-
-# Добавляем корневую директорию в путь для импортов
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
 from datetime import datetime
 from telegram.ext import ContextTypes
 
 from bot.config import logger, ALERT_CHECK_INTERVAL, DAILY_RATES_TIME
 from bot.services.cbr_api import get_currency_rates_with_tomorrow
-from db import get_all_active_alerts, remove_alert, get_all_users
+from bot.db import get_all_active_alerts, remove_alert, get_all_users  # Измененный импорт
 
 logger = logging.getLogger(__name__)
+
+# ... остальной код без изменений ...
 
 async def check_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Проверка условий уведомлений"""
