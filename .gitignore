@@ -5,14 +5,20 @@
 # Python cache
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
 
 # Virtual environment
 venv/
 env/
+ENV/
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # OS
 .DS_Store
@@ -25,3 +31,12 @@ logs/
 # Bot token and secrets
 config.py
 secrets.py
+
+# Database
+*.db
+*.sqlite3
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
