@@ -1,4 +1,10 @@
 import logging
+import os
+import sys
+
+# Добавляем корневую директорию в путь для импортов
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 from datetime import datetime
 from telegram.ext import ContextTypes
 
