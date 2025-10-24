@@ -1,19 +1,16 @@
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler
 import logging
-import os
-import sys
-
-# Добавляем корневую директорию в путь для импортов
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from bot.config import logger
 from bot.handlers.keyboards import get_main_menu_keyboard
 from bot.services.deepseek_api import ask_deepseek
 from bot.services.cbr_api import get_key_rate
-from db import update_user_info
+from bot.db import update_user_info  # Измененный импорт
 
 logger = logging.getLogger(__name__)
+
+# ... остальной код без изменений ...
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /start"""
