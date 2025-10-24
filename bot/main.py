@@ -76,13 +76,14 @@ class BotRunner:
     async def main_async(self) -> None:
         """Асинхронная основная функция для запуска бота"""
         try:
-            # Настройка обработчиков сигналов
-            loop = asyncio.get_running_loop()
-            for sig in [signal.SIGTERM, signal.SIGINT]:
-                loop.add_signal_handler(
-                    sig, 
-                    lambda s=sig: asyncio.create_task(self.shutdown(s))
-                )
+            # Настройка обработчиков сигналов (только на Unix-системах)
+            if os.name != 'nt':  # Не Windows
+                loop = asyncio.get_running_loop()
+                for sig in [signal.SIGTERM, signal.SIGINT]:
+                    loop.add_signal_handler(
+                        sig, 
+                        lambda s=sig: asyncio.create_task(self.shutdown(s))
+                    )
             
             # Настройка приложения
             self.setup_application()
@@ -97,7 +98,9 @@ class BotRunner:
                 drop_pending_updates=True,
                 allowed_updates=['message', 'callback_query'],
                 timeout=10,
-                pool_timeout=10
+                pool_timeout=10,
+                connect_timeout=10,
+                read_timeout=10
             )
             
             logger.info("Бот успешно запущен и готов к работе!")
