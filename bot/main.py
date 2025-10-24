@@ -1,12 +1,17 @@
 import logging
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application
 
 from bot.config import TOKEN
 from bot.handlers.commands import setup_commands
 from bot.handlers.callbacks import setup_callbacks
 from bot.handlers.messages import setup_messages
+from bot.handlers.currency import setup_currency_handlers
+from bot.handlers.crypto import setup_crypto_handlers
+from bot.handlers.key_rate import setup_key_rate_handlers
+from bot.handlers.ai_chat import setup_ai_handlers
+from bot.handlers.alerts import setup_alerts_handlers
 from bot.jobs.alerts import setup_jobs
-from database.db import init_db
+from db import init_db
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +30,11 @@ def main() -> None:
 
         # Настройка обработчиков
         setup_commands(application)
+        setup_currency_handlers(application)
+        setup_crypto_handlers(application)
+        setup_key_rate_handlers(application)
+        setup_ai_handlers(application)
+        setup_alerts_handlers(application)
         setup_callbacks(application)
         setup_messages(application)
         
