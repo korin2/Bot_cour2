@@ -30,6 +30,7 @@ def main():
         application.add_handler(CommandHandler("ai", show_ai_chat))
         application.add_handler(CommandHandler("alert", alert_command))
         application.add_handler(CommandHandler("myalerts", myalerts_command))
+        application.add_handler(CommandHandler("weather", show_weather))  # Новая команда!
         
         # Обработчики кнопок и сообщений
         application.add_handler(CallbackQueryHandler(button_handler))
