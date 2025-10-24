@@ -271,7 +271,17 @@ def get_metal_rates():
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         
-        root = ET.fromstring(response.content)
+        # Декодируем содержимое с правильной кодировкой
+        content = response.content.decode('windows-1251')
+        
+        # Пытаемся распарсить XML, игнорируя ошибки разбора
+        try:
+            root = ET.fromstring(content)
+        except ET.ParseError as e:
+            logger.warning(f"Ошибка парсинга XML, пытаемся восстановить: {e}")
+            # Пытаемся починить XML удалением проблемных символов
+            content_clean = content.replace('\x00', '').strip()
+            root = ET.fromstring(content_clean)
         
         metal_rates = {}
         metals_map = {
@@ -285,16 +295,26 @@ def get_metal_rates():
             metal_code = record.get('Code')
             if metal_code in metals_map:
                 metal_info = metals_map[metal_code]
-                buy_price = float(record.find('Buy').text)
-                sell_price = float(record.find('Sell').text)
-                avg_price = (buy_price + sell_price) / 2
                 
-                metal_rates[metal_info['name']] = {
-                    'price': avg_price,
-                    'display_name': metal_info['display'],
-                    'buy': buy_price,
-                    'sell': sell_price
-                }
+                # Безопасное извлечение данных
+                buy_elem = record.find('Buy')
+                sell_elem = record.find('Sell')
+                
+                if buy_elem is not None and sell_elem is not None:
+                    try:
+                        buy_price = float(buy_elem.text.replace(',', '.'))
+                        sell_price = float(sell_elem.text.replace(',', '.'))
+                        avg_price = (buy_price + sell_price) / 2
+                        
+                        metal_rates[metal_info['name']] = {
+                            'price': avg_price,
+                            'display_name': metal_info['display'],
+                            'buy': buy_price,
+                            'sell': sell_price
+                        }
+                    except (ValueError, AttributeError) as e:
+                        logger.warning(f"Ошибка преобразования данных для металла {metal_code}: {e}")
+                        continue
         
         if metal_rates:
             metal_rates['update_date'] = datetime.now().strftime('%d.%m.%Y')
@@ -306,6 +326,50 @@ def get_metal_rates():
             
     except Exception as e:
         logger.error(f"Ошибка при получении курсов металлов: {e}")
+        # Логируем первые 500 символов ответа для отладки
+        if 'response' in locals():
+            logger.debug(f"Ответ сервера (первые 500 символов): {response.text[:500]}")
+        return None
+
+def get_metal_rates_fallback():
+    """Резервная функция для получения курсов металлов"""
+    try:
+        # Демо-данные на случай недоступности API
+        metal_rates = {
+            'gold': {
+                'price': 6500.0,
+                'display_name': 'Золото',
+                'buy': 6400.0,
+                'sell': 6600.0
+            },
+            'silver': {
+                'price': 80.0,
+                'display_name': 'Серебро',
+                'buy': 78.0,
+                'sell': 82.0
+            },
+            'platinum': {
+                'price': 3200.0,
+                'display_name': 'Платина', 
+                'buy': 3150.0,
+                'sell': 3250.0
+            },
+            'palladium': {
+                'price': 3800.0,
+                'display_name': 'Палладий',
+                'buy': 3750.0,
+                'sell': 3850.0
+            }
+        }
+        
+        metal_rates['update_date'] = datetime.now().strftime('%d.%m.%Y')
+        metal_rates['source'] = 'demo_fallback'
+        
+        logger.info("Используются демо-данные по металлам")
+        return metal_rates
+        
+    except Exception as e:
+        logger.error(f"Ошибка в fallback функции металлов: {e}")
         return None
 
 def get_crypto_rates():
@@ -1083,6 +1147,11 @@ async def show_metal_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     try:
         metal_rates = get_metal_rates()
         
+        # Если не удалось получить данные, используем fallback
+        if not metal_rates:
+            logger.warning("Не удалось получить данные от ЦБ РФ, используем fallback")
+            metal_rates = get_metal_rates_fallback()
+        
         if not metal_rates:
             error_msg = "❌ Не удалось получить курсы драгоценных металлов от ЦБ РФ."
             keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
@@ -1095,6 +1164,10 @@ async def show_metal_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         
         message = format_metal_rates_message(metal_rates)
+        
+        # Добавляем предупреждение если используем демо-данные
+        if metal_rates.get('source') == 'demo_fallback':
+            message += "\n\n⚠️ <i>Используются демонстрационные данные (ЦБ РФ недоступен)</i>"
         
         # Клавиатура с кнопками
         keyboard = [
@@ -1225,7 +1298,7 @@ async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE) -> None:
                     parse_mode='HTML'
                 )
                 success_count += 1
-                # Небольшая задержка чтобы не превысить лимиты Telegram
+                # Небольская задержка чтобы не превысить лимиты Telegram
                 await asyncio.sleep(0.1)
             except Exception as e:
                 logger.warning(f"Не удалось отправить сообщение пользователю {user['user_id']}: {e}")
