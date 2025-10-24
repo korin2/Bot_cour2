@@ -17,7 +17,9 @@ from bot.handlers.key_rate import setup_key_rate_handlers
 from bot.handlers.ai_chat import setup_ai_handlers
 from bot.handlers.alerts import setup_alerts_handlers
 from bot.jobs.alerts import setup_jobs
-from db import init_db
+from bot.db import init_db  # Измененный импорт
+
+# ... остальной код без изменений ...
 
 async def post_init(application: Application) -> None:
     """Функция, выполняемая после инициализации бота"""
