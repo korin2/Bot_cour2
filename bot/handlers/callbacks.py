@@ -1,6 +1,11 @@
 from telegram import Update
 from telegram.ext import ContextTypes, CallbackQueryHandler
 import logging
+import os
+import sys
+
+# Добавляем корневую директорию в путь для импортов
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from bot.config import logger
 from bot.handlers.keyboards import get_main_menu_keyboard
