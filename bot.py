@@ -24,10 +24,218 @@ TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 if not TOKEN:
     raise ValueError("Требуется переменная окружения TELEGRAM_BOT_TOKEN")
 
+DEEPSEEK_API_KEY = os.getenv('TG_BOT_APIDEEPSEEK')
+if not DEEPSEEK_API_KEY:
+    logger.warning("Не найден API ключ DeepSeek. Функционал ИИ будет недоступен.")
+
 # Базовый URL для официального API ЦБ РФ
 CBR_API_BASE = "https://www.cbr.ru/"
 # CoinGecko API для криптовалют
 COINGECKO_API_BASE = "https://api.coingecko.com/api/v3/"
+# DeepSeek API
+DEEPSEEK_API_BASE = "https://api.deepseek.com/v1/"
+
+# =============================================================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С ИИ DEEPSEEK
+# =============================================================================
+
+async def ask_deepseek(prompt: str, context: ContextTypes.DEFAULT_TYPE = None) -> str:
+    """Отправляет запрос к API DeepSeek и возвращает ответ"""
+    if not DEEPSEEK_API_KEY:
+        return "❌ Функционал ИИ временно недоступен. Отсутствует API ключ."
+    
+    try:
+        url = f"{DEEPSEEK_API_BASE}chat/completions"
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {DEEPSEEK_API_KEY}'
+        }
+        
+        # Формируем промпт с контекстом финансового помощника
+        system_message = """Ты - финансовый помощник в телеграм боте. Ты помогаешь пользователям с вопросами о:
+- Курсах валют ЦБ РФ
+- Ключевой ставке ЦБ РФ  
+- Криптовалютах
+- Финансовой аналитике
+- Инвестициях
+- Экономических вопросах
+
+Отвечай кратко, информативно и по делу. Если вопрос не по теме финансов, вежливо сообщи, что специализируешься на финансовых вопросах."""
+        
+        data = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 1000,
+            "stream": False
+        }
+        
+        logger.info(f"Отправка запроса к DeepSeek API: {prompt[:100]}...")
+        
+        response = requests.post(url, headers=headers, json=data, timeout=30)
+        
+        if response.status_code == 200:
+            result = response.json()
+            answer = result['choices'][0]['message']['content']
+            logger.info("Успешно получен ответ от DeepSeek API")
+            return answer
+        else:
+            error_msg = f"Ошибка API DeepSeek: {response.status_code} - {response.text}"
+            logger.error(error_msg)
+            return f"❌ Произошла ошибка при обращении к ИИ. Попробуйте позже."
+            
+    except requests.exceptions.Timeout:
+        logger.error("Таймаут при запросе к DeepSeek API")
+        return "⏰ ИИ не успел обработать запрос. Попробуйте позже."
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Сетевая ошибка при запросе к DeepSeek API: {e}")
+        return "❌ Произошла сетевая ошибка. Проверьте подключение к интернету."
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при работе с DeepSeek API: {e}")
+        return "❌ Произошла непредвиденная ошибка. Попробуйте позже."
+
+async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает текстовые сообщения для ИИ"""
+    try:
+        user_id = update.effective_user.id
+        user_message = update.message.text
+        
+        # Проверяем, не является ли сообщение командой
+        if user_message.startswith('/'):
+            return
+            
+        # Проверяем, активирован ли режим ИИ для пользователя
+        if context.user_data.get('ai_mode') != True:
+            return
+            
+        # Показываем индикатор набора сообщения
+        await update.message.chat.send_action(action="typing")
+        
+        # Отправляем запрос к DeepSeek
+        ai_response = await ask_deepseek(user_message, context)
+        
+        # Отправляем ответ
+        await update.message.reply_text(
+            f"🤖 <b>ИИ Ассистент:</b>\n\n{ai_response}",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Новый вопрос", callback_data='ai_chat')],
+                [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+            ])
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка в обработчике ИИ сообщений: {e}")
+        await update.message.reply_text(
+            "❌ Произошла ошибка при обработке вашего запроса.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+            ])
+        )
+
+async def show_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает интерфейс чата с ИИ"""
+    try:
+        if not DEEPSEEK_API_KEY:
+            error_msg = (
+                "❌ <b>Функционал ИИ временно недоступен</b>\n\n"
+                "Отсутствует API ключ DeepSeek. Обратитесь к администратору."
+            )
+            keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if update.callback_query:
+                await update.callback_query.edit_message_text(error_msg, parse_mode='HTML', reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(error_msg, parse_mode='HTML', reply_markup=reply_markup)
+            return
+        
+        # Активируем режим ИИ для пользователя
+        context.user_data['ai_mode'] = True
+        
+        welcome_message = (
+            "🤖 <b>ИИ ФИНАНСОВЫЙ ПОМОЩНИК</b>\n\n"
+            "Задайте мне любой вопрос по темам:\n"
+            "• 💱 Курсы валют и прогнозы\n"
+            "• 💎 Ключевая ставка ЦБ РФ\n"
+            "• ₿ Криптовалюты и инвестиции\n"
+            "• 📊 Финансовая аналитика\n"
+            "• 💰 Экономические вопросы\n\n"
+            "Просто напишите ваш вопрос в чат!\n\n"
+            "<i>Для выхода из режима ИИ используйте кнопку 'Назад в меню'</i>"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("💡 Примеры вопросов", callback_data='ai_examples')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(welcome_message, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(welcome_message, parse_mode='HTML', reply_markup=reply_markup)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при показе чата с ИИ: {e}")
+        error_msg = "❌ Произошла ошибка при запуске ИИ помощника."
+        keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        if update.callback_query:
+            await update.callback_query.message.reply_text(error_msg, reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(error_msg, reply_markup=reply_markup)
+
+async def show_ai_examples(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает примеры вопросов для ИИ"""
+    try:
+        examples_text = (
+            "💡 <b>ПРИМЕРЫ ВОПРОСОВ ДЛЯ ИИ</b>\n\n"
+            "<b>Курсы валют:</b>\n"
+            "• Каков прогноз курса доллара на ближайшую неделю?\n"
+            "• Почему евро укрепляется против рубля?\n"
+            "• Какие факторы влияют на курс юаня?\n\n"
+            
+            "<b>Ключевая ставка:</b>\n"
+            "• Когда ЦБ РФ может изменить ключевую ставку?\n"
+            "• Как ключевая ставка влияет на инфляцию?\n"
+            "• Какая динамика ключевой ставки в этом году?\n\n"
+            
+            "<b>Криптовалюты:</b>\n"
+            "• Стоит ли инвестировать в Bitcoin сейчас?\n"
+            "• Какие перспективы у Ethereum?\n"
+            "• Как регулируются криптовалюты в России?\n\n"
+            
+            "<b>Инвестиции:</b>\n"
+            "• Во что лучше инвестировать сбережения?\n"
+            "• Какие риски у инвестиций в акции?\n"
+            "• Как диверсифицировать инвестиционный портфель?\n\n"
+            
+            "<b>Экономика:</b>\n"
+            "• Какие тенденции на финансовых рынках?\n"
+            "• Как инфляция влияет на экономику?\n"
+            "• Какие меры поддержки есть для бизнеса?\n\n"
+            
+            "<i>Напишите любой из этих вопросов или свой собственный!</i>"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🤖 Задать вопрос", callback_data='ai_chat')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(examples_text, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(examples_text, parse_mode='HTML', reply_markup=reply_markup)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при показе примеров ИИ: {e}")
 
 # =============================================================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С КУРСАМИ ВАЛЮТ ЦБ РФ
@@ -1145,18 +1353,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Получаем актуальные данные для приветственного сообщения
         key_rate_data = get_key_rate()
         
-        # Главное меню (убраны кнопки инфляции и металлов)
+        # Главное меню (добавлена кнопка ИИ после "Ключевая ставка")
         keyboard = [
             [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
             [InlineKeyboardButton("₿ Криптовалюты", callback_data='crypto_rates')],
             [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
+            [InlineKeyboardButton("🤖 ИИ", callback_data='ai_chat')],
             [InlineKeyboardButton("🔔 Мои уведомления", callback_data='my_alerts')],
             [InlineKeyboardButton("❓ Помощь", callback_data='help')],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         start_message = f'{greeting} Я бот для отслеживания финансовых данных!\n\n'
-        start_message += '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ</b>\n\n'
+        start_message += '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ + ИИ</b>\n\n'
         
         # Добавляем информацию о ключевой ставке в приветствие
         if key_rate_data and key_rate_data.get('is_current'):
@@ -1186,13 +1395,14 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         help_text = (
             f"Привет{greeting} Я бот для отслеживания финансовых данных!\n\n"
             
-            "🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ</b>\n\n"
+            "🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ + ИИ</b>\n\n"
             
             "💱 <b>Основные команды:</b>\n"
             "• <code>/start</code> - главное меню\n"
             "• <code>/rates</code> - курсы валют ЦБ РФ с прогнозом на завтра\n"
             "• <code>/crypto</code> - курсы криптовалют\n"
             "• <code>/keyrate</code> - ключевая ставка ЦБ РФ\n"
+            "• <code>/ai</code> - ИИ финансовый помощник\n"
             "• <code>/myalerts</code> - мои активные уведомления\n"
             "• <code>/debug_alerts</code> - отладка уведомлений\n"
             "• <code>/help</code> - эта справка\n\n"
@@ -1200,6 +1410,11 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "🔔 <b>Уведомления:</b>\n"
             "• <code>/alert USD RUB 80 above</code> - уведомит когда USD выше 80 руб.\n"
             "• <code>/alert EUR RUB 90 below</code> - уведомит когда EUR ниже 90 руб.\n\n"
+            
+            "🤖 <b>ИИ Помощник:</b>\n"
+            "• Задавайте вопросы по финансам, инвестициям, курсам валют\n"
+            "• Получайте аналитику и прогнозы\n"
+            "• Консультируйтесь по экономическим вопросам\n\n"
             
             "⏰ <b>Автоматические уведомления</b>\n"
             "• Проверка условий каждые 30 минут\n"
@@ -1211,11 +1426,13 @@ async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "📊 <b>Доступные разделы:</b>\n"
             "• <b>Курсы валют</b> - основные мировые валюты с прогнозом на завтра\n"
             "• <b>Криптовалюты</b> - Bitcoin, Ethereum, Binance Coin и другие\n"
-            "• <b>Ключевая ставка</b> - основная процентная ставка ЦБ РФ\n\n"
+            "• <b>Ключевая ставка</b> - основная процентная ставка ЦБ РФ\n"
+            "• <b>ИИ Помощник</b> - искусственный интеллект для финансовых вопросов\n\n"
             
             "💡 <b>ИНФОРМАЦИЯ</b>\n\n"
             "• Данные по ЦБ РФ предоставляются через официальные источники\n"
             "• Курсы криптовалют предоставляются CoinGecko API\n"
+            "• ИИ помощник работает на основе DeepSeek AI\n"
             "• Курсы на завтра показываются только после публикации ЦБ РФ\n"
             "• Используются только проверенные источники данных"
         )
@@ -1260,6 +1477,9 @@ async def keyrate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def crypto_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await show_crypto_rates(update, context)
 
+async def ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await show_ai_chat(update, context)
+
 async def myalerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await my_alerts_command(update, context)
 
@@ -1277,6 +1497,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if data == 'help':
             await show_help(update, context)
         elif data == 'back_to_main':
+            # Деактивируем режим ИИ при возврате в главное меню
+            context.user_data['ai_mode'] = False
+            
             user = query.from_user
             
             # Создаем персонализированное приветствие
@@ -1286,6 +1509,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
                 [InlineKeyboardButton("₿ Криптовалюты", callback_data='crypto_rates')],
                 [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
+                [InlineKeyboardButton("🤖 ИИ", callback_data='ai_chat')],
                 [InlineKeyboardButton("🔔 Мои уведомления", callback_data='my_alerts')],
                 [InlineKeyboardButton("❓ Помощь", callback_data='help')],
             ]
@@ -1293,7 +1517,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             await query.edit_message_text(
                 f'{greeting} Я бот для отслеживания финансовых данных!\n\n'
-                '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ</b>\n\n'
+                '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ + ИИ</b>\n\n'
                 'Выберите раздел из меню ниже:',
                 parse_mode='HTML',
                 reply_markup=reply_markup
@@ -1304,6 +1528,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await show_crypto_rates(update, context)
         elif data == 'key_rate':
             await show_key_rate(update, context)
+        elif data == 'ai_chat':
+            await show_ai_chat(update, context)
+        elif data == 'ai_examples':
+            await show_ai_examples(update, context)
         elif data == 'my_alerts':
             await my_alerts_command(update, context)
         elif data == 'clear_all_alerts':
@@ -1427,12 +1655,16 @@ def main() -> None:
         application.add_handler(CommandHandler("currency", currency_rates_command))
         application.add_handler(CommandHandler("keyrate", keyrate_command))
         application.add_handler(CommandHandler("crypto", crypto_command))
+        application.add_handler(CommandHandler("ai", ai_command))
         application.add_handler(CommandHandler("alert", alert_command))
         application.add_handler(CommandHandler("myalerts", myalerts_command))
         application.add_handler(CommandHandler("debug_alerts", debug_alerts_command))
         
         # Обработчик для inline-кнопок
         application.add_handler(CallbackQueryHandler(button_handler))
+        
+        # Обработчик для текстовых сообщений (для ИИ)
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
         
         # Обработчик для неизвестных команд
         application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
