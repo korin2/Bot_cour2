@@ -4,6 +4,7 @@ from config import TOKEN, logger
 from db import init_db
 from handlers import start, help_command, button_handler, show_currency_rates
 from handlers import handle_ai_message, alert_command, myalerts_command, show_key_rate, show_crypto_rates, show_ai_chat
+from handlers import show_other_functions, show_bot_stats, show_bot_about, show_settings
 from jobs import setup_jobs
 
 async def post_init(application):
