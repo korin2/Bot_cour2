@@ -1,7 +1,7 @@
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from config import logger
+from config import logger, DEEPSEEK_API_KEY  # Добавьте DEEPSEEK_API_KEY здесь
 from services import (
     get_currency_rates_with_tomorrow, format_currency_rates_message, 
     get_key_rate, format_key_rate_message, get_crypto_rates, 
