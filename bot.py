@@ -83,10 +83,19 @@ async def ask_deepseek(prompt: str, context: ContextTypes.DEFAULT_TYPE = None) -
             answer = result['choices'][0]['message']['content']
             logger.info("Успешно получен ответ от DeepSeek API")
             return answer
+        elif response.status_code == 402:
+            logger.error("Недостаточно средств на счету DeepSeek API")
+            return "❌ Функционал ИИ временно недоступен. Недостаточно средств на API аккаунте. Обратитесь к администратору."
+        elif response.status_code == 401:
+            logger.error("Неверный API ключ DeepSeek")
+            return "❌ Ошибка аутентификации API. Проверьте API ключ."
+        elif response.status_code == 429:
+            logger.error("Превышен лимит запросов к DeepSeek API")
+            return "⏰ Превышен лимит запросов. Попробуйте позже."
         else:
             error_msg = f"Ошибка API DeepSeek: {response.status_code} - {response.text}"
             logger.error(error_msg)
-            return f"❌ Произошла ошибка при обращении к ИИ. Попробуйте позже."
+            return f"❌ Временная ошибка сервиса ИИ. Попробуйте позже."
             
     except requests.exceptions.Timeout:
         logger.error("Таймаут при запросе к DeepSeek API")
@@ -146,6 +155,27 @@ async def show_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "Отсутствует API ключ DeepSeek. Обратитесь к администратору."
             )
             keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if update.callback_query:
+                await update.callback_query.edit_message_text(error_msg, parse_mode='HTML', reply_markup=reply_markup)
+            else:
+                await update.message.reply_text(error_msg, parse_mode='HTML', reply_markup=reply_markup)
+            return
+        
+        # Тестируем подключение к API
+        test_response = await ask_deepseek("Тестовое сообщение", context)
+        if test_response.startswith("❌") or test_response.startswith("⏰"):
+            # Если тест не прошел, показываем ошибку
+            error_msg = (
+                "❌ <b>Функционал ИИ временно недоступен</b>\n\n"
+                f"{test_response}\n\n"
+                "Попробуйте использовать другие функции бота."
+            )
+            keyboard = [
+                [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
+                [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             if update.callback_query:
@@ -236,6 +266,38 @@ async def show_ai_examples(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             
     except Exception as e:
         logger.error(f"Ошибка при показе примеров ИИ: {e}")
+
+async def show_ai_unavailable(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает сообщение о недоступности ИИ"""
+    try:
+        message = (
+            "❌ <b>ИИ ПОМОЩНИК ВРЕМЕННО НЕДОСТУПЕН</b>\n\n"
+            "В настоящее время функционал ИИ недоступен по техническим причинам.\n\n"
+            "Возможные причины:\n"
+            "• Недостаточно средств на API аккаунте\n"
+            "• Временные проблемы с сервисом DeepSeek\n"
+            "• Превышены лимиты запросов\n\n"
+            "Вы можете использовать другие функции бота:\n"
+            "• 💱 <b>Курсы валют</b> - актуальные курсы ЦБ РФ\n"
+            "• ₿ <b>Криптовалюты</b> - курсы основных криптовалют\n"
+            "• 💎 <b>Ключевая ставка</b> - текущая ставка ЦБ РФ\n"
+            "• 🔔 <b>Уведомления</b> - алерты по курсам валют\n\n"
+            "Мы работаем над восстановлением функционала ИИ."
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при показе сообщения о недоступности ИИ: {e}")
 
 # =============================================================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С КУРСАМИ ВАЛЮТ ЦБ РФ
@@ -1339,6 +1401,44 @@ async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # ОСНОВНЫЕ КОМАНДЫ БОТА
 # =============================================================================
 
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает главное меню"""
+    try:
+        user = update.effective_user
+        greeting = f"Привет, {user.first_name}!" if user.first_name else "Привет!"
+        
+        # Проверяем доступность ИИ
+        test_ai = await ask_deepseek("test", context)
+        ai_available = not (test_ai.startswith("❌") or test_ai.startswith("⏰"))
+        
+        keyboard = [
+            [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
+            [InlineKeyboardButton("₿ Криптовалюты", callback_data='crypto_rates')],
+            [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
+        ]
+        
+        if ai_available:
+            keyboard.append([InlineKeyboardButton("🤖 ИИ Помощник", callback_data='ai_chat')])
+        else:
+            keyboard.append([InlineKeyboardButton("❌ ИИ временно недоступен", callback_data='ai_unavailable')])
+            
+        keyboard.extend([
+            [InlineKeyboardButton("🔔 Мои уведомления", callback_data='my_alerts')],
+            [InlineKeyboardButton("❓ Помощь", callback_data='help')],
+        ])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.effective_message.edit_text(
+            f'{greeting} Я бот для отслеживания финансовых данных!\n\n'
+            '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ</b>\n\n'
+            'Выберите раздел из меню ниже:',
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при показе главного меню: {e}")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /start"""
     try:
@@ -1353,25 +1453,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Получаем актуальные данные для приветственного сообщения
         key_rate_data = get_key_rate()
         
-        # Главное меню (добавлена кнопка ИИ после "Ключевая ставка")
+        # Главное меню (проверяем доступность ИИ)
+        test_ai = await ask_deepseek("test", context)
+        ai_available = not (test_ai.startswith("❌") or test_ai.startswith("⏰"))
+        
         keyboard = [
             [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
             [InlineKeyboardButton("₿ Криптовалюты", callback_data='crypto_rates')],
             [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
-            [InlineKeyboardButton("🤖 ИИ", callback_data='ai_chat')],
+        ]
+        
+        if ai_available:
+            keyboard.append([InlineKeyboardButton("🤖 ИИ Помощник", callback_data='ai_chat')])
+        else:
+            keyboard.append([InlineKeyboardButton("❌ ИИ временно недоступен", callback_data='ai_unavailable')])
+            
+        keyboard.extend([
             [InlineKeyboardButton("🔔 Мои уведомления", callback_data='my_alerts')],
             [InlineKeyboardButton("❓ Помощь", callback_data='help')],
-        ]
+        ])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         start_message = f'{greeting} Я бот для отслеживания финансовых данных!\n\n'
-        start_message += '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ + ИИ</b>\n\n'
+        start_message += '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ</b>\n\n'
         
         # Добавляем информацию о ключевой ставке в приветствие
         if key_rate_data and key_rate_data.get('is_current'):
             rate = key_rate_data['rate']
             start_message += f'💎 <b>Ключевая ставка ЦБ РФ:</b> <b>{rate:.2f}%</b>\n\n'
         
+        if not ai_available:
+            start_message += '⚠️ <i>ИИ помощник временно недоступен</i>\n\n'
+            
         start_message += 'Выберите раздел из меню ниже:'
         
         await update.message.reply_text(
@@ -1499,29 +1613,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif data == 'back_to_main':
             # Деактивируем режим ИИ при возврате в главное меню
             context.user_data['ai_mode'] = False
-            
-            user = query.from_user
-            
-            # Создаем персонализированное приветствие
-            greeting = f"Привет, {user.first_name}!" if user.first_name else "Привет!"
-            
-            keyboard = [
-                [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
-                [InlineKeyboardButton("₿ Криптовалюты", callback_data='crypto_rates')],
-                [InlineKeyboardButton("💎 Ключевая ставка", callback_data='key_rate')],
-                [InlineKeyboardButton("🤖 ИИ", callback_data='ai_chat')],
-                [InlineKeyboardButton("🔔 Мои уведомления", callback_data='my_alerts')],
-                [InlineKeyboardButton("❓ Помощь", callback_data='help')],
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                f'{greeting} Я бот для отслеживания финансовых данных!\n\n'
-                '🏛 <b>ОФИЦИАЛЬНЫЕ ДАННЫЕ ЦБ РФ + КРИПТОВАЛЮТЫ + ИИ</b>\n\n'
-                'Выберите раздел из меню ниже:',
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
+            await show_main_menu(update, context)
         elif data == 'currency_rates':
             await show_currency_rates(update, context)
         elif data == 'crypto_rates':
@@ -1530,6 +1622,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await show_key_rate(update, context)
         elif data == 'ai_chat':
             await show_ai_chat(update, context)
+        elif data == 'ai_unavailable':
+            await show_ai_unavailable(update, context)
         elif data == 'ai_examples':
             await show_ai_examples(update, context)
         elif data == 'my_alerts':
@@ -1573,6 +1667,92 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
     except Exception as e:
         logger.error(f"Ошибка в обработчике неизвестных команд: {e}")
+
+# =============================================================================
+# ФИНАНСОВЫЕ ВОПРОСЫ БЕЗ ИИ (FALLBACK)
+# =============================================================================
+
+async def handle_financial_questions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обрабатывает финансовые вопросы без ИИ API"""
+    try:
+        user_message = update.message.text.lower()
+        
+        # Простые ответы на частые вопросы
+        responses = {
+            'курс доллара': await get_simple_currency_response('USD'),
+            'курс евро': await get_simple_currency_response('EUR'),
+            'ключевая ставка': await get_simple_key_rate_response(),
+            'биткоин': await get_simple_crypto_response('BTC'),
+            'эфириум': await get_simple_crypto_response('ETH'),
+            'криптовалюты': "Для просмотра курсов криптовалют используйте команду /crypto или нажмите '₿ Криптовалюты' в меню",
+            'помощь': "Используйте /help для просмотра всех команд или меню для навигации",
+        }
+        
+        response = None
+        for key, value in responses.items():
+            if key in user_message:
+                response = value
+                break
+        
+        if response:
+            await update.message.reply_text(response, parse_mode='HTML')
+        else:
+            await update.message.reply_text(
+                "🤖 <b>Финансовый помощник</b>\n\n"
+                "К сожалению, функция ИИ временно недоступна.\n\n"
+                "Вы можете:\n"
+                "• 💱 Посмотреть курсы валют\n"
+                "• ₿ Узнать курсы криптовалют\n"
+                "• 💎 Проверить ключевую ставку\n"
+                "• 🔔 Настроить уведомления\n\n"
+                "Используйте меню для навигации!",
+                parse_mode='HTML'
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка в обработчике финансовых вопросов: {e}")
+
+async def get_simple_currency_response(currency: str) -> str:
+    """Возвращает простой ответ о курсе валюты"""
+    try:
+        rates_today, date_today, _, _ = get_currency_rates_with_tomorrow()
+        if rates_today and currency in rates_today:
+            rate = rates_today[currency]['value']
+            name = rates_today[currency]['name']
+            return f"💱 <b>{name}</b>\nТекущий курс: <b>{rate:.2f} руб.</b>\n\nДата: {date_today}"
+        return "❌ Не удалось получить курс валюты"
+    except Exception as e:
+        logger.error(f"Ошибка при получении курса {currency}: {e}")
+        return "❌ Ошибка при получении данных"
+
+async def get_simple_key_rate_response() -> str:
+    """Возвращает простой ответ о ключевой ставке"""
+    try:
+        key_rate_data = get_key_rate()
+        if key_rate_data:
+            rate = key_rate_data['rate']
+            date = key_rate_data.get('date', 'неизвестно')
+            return f"💎 <b>Ключевая ставка ЦБ РФ</b>\nТекущее значение: <b>{rate:.2f}%</b>\n\nДата: {date}"
+        return "❌ Не удалось получить ключевую ставку"
+    except Exception as e:
+        logger.error(f"Ошибка при получении ключевой ставки: {e}")
+        return "❌ Ошибка при получении данных"
+
+async def get_simple_crypto_response(crypto: str) -> str:
+    """Возвращает простой ответ о криптовалюте"""
+    try:
+        crypto_rates = get_crypto_rates() or get_crypto_rates_fallback()
+        if crypto_rates:
+            if crypto == 'BTC' and 'bitcoin' in crypto_rates:
+                btc = crypto_rates['bitcoin']
+                return f"₿ <b>Bitcoin (BTC)</b>\nКурс: <b>{btc['price_rub']:,.0f} руб.</b>\nИзменение 24ч: {btc['change_24h']:+.2f}%"
+            elif crypto == 'ETH' and 'ethereum' in crypto_rates:
+                eth = crypto_rates['ethereum']
+                return f"🔷 <b>Ethereum (ETH)</b>\nКурс: <b>{eth['price_rub']:,.0f} руб.</b>\nИзменение 24ч: {eth['change_24h']:+.2f}%"
+        return f"Для полной информации о {crypto} используйте команду /crypto"
+    except Exception as e:
+        logger.error(f"Ошибка при получении данных {crypto}: {e}")
+        return "❌ Ошибка при получении данных"
 
 # =============================================================================
 # АВТОМАТИЧЕСКИЕ РАССЫЛКИ И ФОНОВЫЕ ЗАДАЧИ
@@ -1665,6 +1845,12 @@ def main() -> None:
         
         # Обработчик для текстовых сообщений (для ИИ)
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
+        
+        # Дополнительный обработчик для финансовых вопросов (fallback)
+        application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND, 
+            handle_financial_questions
+        ))
         
         # Обработчик для неизвестных команд
         application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
