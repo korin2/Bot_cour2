@@ -1,4 +1,4 @@
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CommandHandler
 import logging
 
@@ -122,7 +122,6 @@ async def show_crypto_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if crypto_rates.get('source') == 'demo_fallback':
             message_text += "\n\n⚠️ <i>Используются демонстрационные данные (CoinGecko API недоступен)</i>"
         
-        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
         keyboard = [
             [InlineKeyboardButton("🔄 Обновить", callback_data='crypto_rates')],
             [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
