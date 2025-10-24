@@ -639,3 +639,96 @@ async def ask_deepseek(prompt: str, context: ContextTypes.DEFAULT_TYPE = None) -
     except Exception as e:
         logger.error(f"Неожиданная ошибка при работе с DeepSeek API: {e}")
         return "❌ Произошла непредвиденная ошибка. Попробуйте позже."
+
+# Добавьте в конец services.py
+async def check_alerts(context: ContextTypes.DEFAULT_TYPE):
+    """Проверяет активные уведомления и отправляет уведомления при срабатывании"""
+    try:
+        from db import get_all_active_alerts, deactivate_alert
+        
+        alerts = await get_all_active_alerts()
+        if not alerts:
+            return
+        
+        rates_today, _, _, _ = get_currency_rates_with_tomorrow()
+        if not rates_today:
+            return
+        
+        for alert in alerts:
+            user_id = alert['user_id']
+            from_curr = alert['from_currency']
+            threshold = alert['threshold']
+            direction = alert['direction']
+            alert_id = alert['id']
+            
+            if from_curr in rates_today:
+                current_rate = rates_today[from_curr]['value']
+                triggered = False
+                
+                if direction == 'above' and current_rate >= threshold:
+                    triggered = True
+                elif direction == 'below' and current_rate <= threshold:
+                    triggered = True
+                
+                if triggered:
+                    message = (
+                        f"🔔 <b>УВЕДОМЛЕНИЕ СРАБОТАЛО!</b>\n\n"
+                        f"💱 <b>Пара:</b> {from_curr}/RUB\n"
+                        f"🎯 <b>Порог:</b> {threshold} руб.\n"
+                        f"💹 <b>Текущий курс:</b> {current_rate:.2f} руб.\n"
+                        f"📊 <b>Условие:</b> курс <b>{'выше' if direction == 'above' else 'ниже'}</b> {threshold} руб.\n\n"
+                        f"✅ <i>Уведомление выполнено и удалено.</i>"
+                    )
+                    
+                    await context.bot.send_message(
+                        chat_id=user_id, 
+                        text=message, 
+                        parse_mode='HTML'
+                    )
+                    await deactivate_alert(alert_id)
+                    
+    except Exception as e:
+        logger.error(f"Ошибка при проверке уведомлений: {e}")
+
+async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE):
+    """Ежедневная рассылка основных финансовых данных"""
+    try:
+        from db import get_all_users
+        
+        users = await get_all_users()
+        if not users:
+            return
+        
+        # Формируем сводное сообщение
+        message = "🌅 <b>ЕЖЕДНЕВНАЯ ФИНАНСОВАЯ СВОДКА</b>\n\n"
+        
+        # Добавляем курсы валют
+        rates_today, date_today, _, _ = get_currency_rates_with_tomorrow()
+        if rates_today:
+            message += "💱 <b>Основные курсы ЦБ РФ:</b>\n"
+            for currency in ['USD', 'EUR']:
+                if currency in rates_today:
+                    rate = rates_today[currency]['value']
+                    message += f"   {currency}: <b>{rate:.2f} руб.</b>\n"
+            message += "\n"
+        
+        # Добавляем ключевую ставку
+        key_rate_data = get_key_rate()
+        if key_rate_data:
+            message += f"💎 <b>Ключевая ставка:</b> {key_rate_data['rate']:.2f}%\n\n"
+        
+        message += "💡 Используйте команды бота для подробной информации"
+        
+        # Отправляем всем пользователям
+        for user in users:
+            try:
+                await context.bot.send_message(
+                    chat_id=user['user_id'],
+                    text=message,
+                    parse_mode='HTML'
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки рассылки пользователю {user['user_id']}: {e}")
+                
+    except Exception as e:
+        logger.error(f"Ошибка при ежедневной рассылке: {e}")
