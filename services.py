@@ -4,14 +4,12 @@ import json
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import logging
-from config import CBR_API_BASE, COINGECKO_API_BASE, DEEPSEEK_API_BASE, DEEPSEEK_API_KEY
+from config import CBR_API_BASE, COINGECKO_API_BASE, DEEPSEEK_API_BASE, DEEPSEEK_API_KEY, logger
+from telegram.ext import ContextTypes
 
-logger = logging.getLogger(__name__)
-
-# Импорт функций из оригинального bot.py
-# (перенесите сюда все функции работы с API из оригинального файла)
-# get_currency_rates_for_date, get_currency_rates_with_tomorrow, 
-# get_key_rate, get_crypto_rates, ask_deepseek и т.д.
+# =============================================================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С КУРСАМИ ВАЛЮТ ЦБ РФ
+# =============================================================================
 
 def get_currency_rates_for_date(date_req):
     """Получает курсы валют на определенную дату"""
@@ -56,4 +54,588 @@ def get_currency_rates_for_date(date_req):
         logger.error(f"Ошибка при получении курсов на дату {date_req}: {e}")
         return None, None
 
-# ... (остальные функции API из оригинального bot.py)
+def get_currency_rates_with_tomorrow():
+    """Получает курсы валют на сегодня и завтра (если доступно)"""
+    try:
+        today = datetime.now()
+        tomorrow = today + timedelta(days=1)
+        
+        # Форматируем даты для запроса
+        date_today = today.strftime('%d/%m/%Y')
+        date_tomorrow = tomorrow.strftime('%d/%m/%Y')
+        
+        # Получаем курсы на сегодня
+        rates_today, date_today_str = get_currency_rates_for_date(date_today)
+        if not rates_today:
+            return {}, 'неизвестная дата', None, None
+        
+        # Пытаемся получить курсы на завтра
+        rates_tomorrow, date_tomorrow_str = get_currency_rates_for_date(date_tomorrow)
+        
+        # Если курсы на завтра не доступны, возвращаем только сегодняшние
+        if not rates_tomorrow:
+            return rates_today, date_today_str, None, None
+        
+        # Рассчитываем изменения для завтрашних курсов
+        changes = {}
+        for currency, today_data in rates_today.items():
+            if currency in rates_tomorrow:
+                today_value = today_data['value']
+                tomorrow_value = rates_tomorrow[currency]['value']
+                change = tomorrow_value - today_value
+                change_percent = (change / today_value) * 100 if today_value > 0 else 0
+                
+                changes[currency] = {
+                    'change': change,
+                    'change_percent': change_percent
+                }
+        
+        return rates_today, date_today_str, rates_tomorrow, changes
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении курсов с завтрашними данными: {e}")
+        return {}, 'неизвестная дата', None, None
+
+def format_currency_rates_message(rates_today: dict, date_today: str, 
+                                rates_tomorrow: dict = None, changes: dict = None) -> str:
+    """Форматирует сообщение с курсами валют на сегодня и завтра"""
+    if not rates_today:
+        return "❌ Не удалось получить курсы валют от ЦБ РФ."
+    
+    message = f"💱 <b>КУРСЫ ВАЛЮТ ЦБ РФ</b>\n"
+    message += f"📅 <i>на {date_today}</i>\n\n"
+    
+    # Основные валюты (доллар, евро)
+    main_currencies = ['USD', 'EUR']
+    for currency in main_currencies:
+        if currency in rates_today:
+            data = rates_today[currency]
+            
+            message += f"💵 <b>{data['name']}</b> ({currency}):\n"
+            message += f"   <b>{data['value']:.2f} руб.</b>\n"
+            
+            # Если есть данные на завтра, показываем прогноз
+            if rates_tomorrow and currency in rates_tomorrow and currency in changes:
+                tomorrow_data = rates_tomorrow[currency]
+                change_info = changes[currency]
+                change_icon = "📈" if change_info['change'] > 0 else "📉" if change_info['change'] < 0 else "➡️"
+                
+                message += f"   <i>Завтра: {tomorrow_data['value']:.2f} руб. {change_icon}</i>\n"
+                message += f"   <i>Изменение: {change_info['change']:+.2f} руб. ({change_info['change_percent']:+.2f}%)</i>\n"
+            
+            message += "\n"
+    
+    # Другие валюты
+    other_currencies = [curr for curr in rates_today.keys() if curr not in main_currencies]
+    if other_currencies:
+        message += "🌍 <b>Другие валюты:</b>\n"
+        
+        for currency in other_currencies:
+            data = rates_today[currency]
+            
+            # Для JPY показываем за 100 единиц
+            if currency == 'JPY':
+                display_value = data['value'] * 100
+                currency_text = f"   {data['name']} ({currency}): <b>{display_value:.2f} руб.</b>"
+            else:
+                currency_text = f"   {data['name']} ({currency}): <b>{data['value']:.2f} руб.</b>"
+            
+            # Добавляем индикатор изменения для завтра, если есть
+            if rates_tomorrow and currency in rates_tomorrow and currency in changes:
+                change_info = changes[currency]
+                change_icon = "📈" if change_info['change'] > 0 else "📉" if change_info['change'] < 0 else "➡️"
+                currency_text += f" {change_icon}"
+            
+            message += currency_text + "\n"
+    
+    # Информация о доступности завтрашних курсов
+    if rates_tomorrow:
+        tomorrow_date = (datetime.now() + timedelta(days=1)).strftime('%d.%m.%Y')
+        message += f"\n📊 <i>Курсы на завтра ({tomorrow_date}) опубликованы ЦБ РФ</i>"
+    else:
+        message += f"\n💡 <i>Курсы на завтра будут опубликованы ЦБ РФ позже</i>"
+    
+    message += f"\n\n💡 <i>Официальные курсы ЦБ РФ с прогнозом на завтра</i>"
+    return message
+
+# =============================================================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С КЛЮЧЕВОЙ СТАВКОЙ ЦБ РФ
+# =============================================================================
+
+def get_key_rate():
+    """Получает ключевую ставку ЦБ РФ с использованием нескольких методов"""
+    
+    # Сначала пробуем парсинг HTML с правильными заголовками
+    key_rate_data = get_key_rate_html()
+    if key_rate_data:
+        return key_rate_data
+    
+    # Если не получилось, пробуем API
+    logger.info("Парсинг HTML не удался, пробуем API...")
+    key_rate_data = get_key_rate_api()
+    if key_rate_data:
+        return key_rate_data
+    
+    # Если оба метода не сработали, возвращаем демо-данные
+    logger.warning("Не удалось получить актуальную ключевую ставку, используем демо-данные")
+    return get_key_rate_demo()
+
+def get_key_rate_html():
+    """Парсинг ключевой ставки с сайта ЦБ РФ"""
+    try:
+        url = "https://cbr.ru/hd_base/KeyRate/"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Referer': 'https://www.cbr.ru/',
+            'Connection': 'keep-alive',
+        }
+        
+        # Добавляем задержку чтобы не выглядеть как бот
+        import time
+        time.sleep(1)
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code == 403:
+            logger.error("Доступ запрещен (403) при парсинге HTML")
+            return None
+        elif response.status_code != 200:
+            logger.error(f"Ошибка HTTP {response.status_code} при парсинге HTML")
+            return None
+            
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Ищем таблицу с ключевыми ставками
+        table = soup.find('table', class_='data')
+        if table:
+            rows = table.find_all('tr')
+            for i in range(1, min(len(rows), 10)):  # Проверяем первые 10 строк
+                cells = rows[i].find_all('td')
+                if len(cells) >= 2:
+                    date_str = cells[0].get_text(strip=True)
+                    rate_str = cells[1].get_text(strip=True).replace(',', '.')
+                    
+                    try:
+                        date_obj = datetime.strptime(date_str, '%d.%m.%Y')
+                        # Проверяем что дата не в будущем
+                        if date_obj <= datetime.now():
+                            rate_value = float(rate_str)
+                            
+                            return {
+                                'rate': rate_value,
+                                'date': date_obj.strftime('%d.%m.%Y'),
+                                'is_current': True,
+                                'source': 'cbr_parsed'
+                            }
+                    except ValueError:
+                        continue
+        
+        return None
+            
+    except Exception as e:
+        logger.error(f"Ошибка при парсинге HTML ключевой ставки: {e}")
+        return None
+
+def get_key_rate_api():
+    """Получает ключевую ставку через API ЦБ РФ"""
+    try:
+        # Альтернативный URL для ключевой ставки
+        url = "https://www.cbr.ru/hd_base/KeyRate/?UniDbQuery.Posted=True&UniDbQuery.From=01.01.2020&UniDbQuery.To=31.12.2025"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            table = soup.find('table', class_='data')
+            
+            if table:
+                rows = table.find_all('tr')
+                for i in range(1, min(len(rows), 5)):  # Первые 5 строк
+                    cells = rows[i].find_all('td')
+                    if len(cells) >= 2:
+                        date_str = cells[0].get_text(strip=True)
+                        rate_str = cells[1].get_text(strip=True).replace(',', '.')
+                        
+                        try:
+                            date_obj = datetime.strptime(date_str, '%d.%m.%Y')
+                            if date_obj <= datetime.now():
+                                rate_value = float(rate_str)
+                                
+                                return {
+                                    'rate': rate_value,
+                                    'date': date_str,
+                                    'is_current': True,
+                                    'source': 'cbr_api'
+                                }
+                        except ValueError:
+                            continue
+        return None
+            
+    except Exception as e:
+        logger.error(f"Ошибка при получении ключевой ставки через API: {e}")
+        return None
+
+def get_key_rate_demo():
+    """Возвращает демо-данные ключевой ставки"""
+    return {
+        'rate': 16.0,  # Примерное значение
+        'date': datetime.now().strftime('%d.%m.%Y'),
+        'is_current': True,
+        'source': 'demo'
+    }
+
+def format_key_rate_message(key_rate_data: dict) -> str:
+    """Форматирует сообщение с ключевой ставкой"""
+    if not key_rate_data:
+        return "❌ Не удалось получить данные по ключевой ставке от ЦБ РФ."
+    
+    rate = key_rate_data['rate']
+    source = key_rate_data.get('source', 'unknown')
+    
+    message = f"💎 <b>КЛЮЧЕВАЯ СТАВКА ЦБ РФ</b>\n\n"
+    message += f"<b>Текущее значение:</b> {rate:.2f}%\n"
+    message += f"\n<b>Дата установления:</b> {key_rate_data.get('date', 'неизвестно')}\n\n"
+    message += "💡 <i>Ключевая ставка - это основная процентная ставка ЦБ РФ,\n"
+    message += "которая влияет на кредиты, депозиты и экономику в целом</i>"
+    
+    # Добавляем информацию об источнике данных
+    if source == 'cbr_parsed':
+        message += f"\n\n✅ <i>Данные получены с официального сайта ЦБ РФ</i>"
+    elif source == 'cbr_api':
+        message += f"\n\n✅ <i>Данные получены через API ЦБ РФ</i>"
+    elif source == 'demo':
+        message += f"\n\n⚠️ <i>Используются демонстрационные данные (ошибка получения реальных)</i>"
+    
+    return message
+
+# =============================================================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С КРИПТОВАЛЮТАМИ
+# =============================================================================
+
+def get_crypto_rates():
+    """Получает курсы криптовалют через CoinGecko API"""
+    try:
+        # Основные криптовалюты для отслеживания
+        crypto_ids = [
+            'bitcoin', 'ethereum', 'binancecoin', 'ripple', 'cardano',
+            'solana', 'polkadot', 'dogecoin', 'tron', 'litecoin'
+        ]
+        
+        url = f"{COINGECKO_API_BASE}simple/price"
+        params = {
+            'ids': ','.join(crypto_ids),
+            'vs_currencies': 'rub,usd',
+            'include_24hr_change': 'true',
+            'include_last_updated_at': 'true'
+        }
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+        }
+        
+        logger.info(f"Запрос к CoinGecko API: {url}")
+        logger.info(f"Параметры: {params}")
+        
+        response = requests.get(url, params=params, headers=headers, timeout=15)
+        
+        if response.status_code != 200:
+            logger.error(f"Ошибка CoinGecko API: {response.status_code}")
+            logger.error(f"Текст ответа: {response.text}")
+            return None
+            
+        data = response.json()
+        logger.info(f"Получены данные от CoinGecko: {type(data)}")
+        
+        # Проверяем структуру ответа
+        if not isinstance(data, dict):
+            logger.error(f"Неправильный формат ответа: ожидался dict, получен {type(data)}")
+            return None
+            
+        # Маппинг названий криптовалют
+        crypto_names = {
+            'bitcoin': {'name': 'Bitcoin', 'symbol': 'BTC'},
+            'ethereum': {'name': 'Ethereum', 'symbol': 'ETH'},
+            'binancecoin': {'name': 'Binance Coin', 'symbol': 'BNB'},
+            'ripple': {'name': 'XRP', 'symbol': 'XRP'},
+            'cardano': {'name': 'Cardano', 'symbol': 'ADA'},
+            'solana': {'name': 'Solana', 'symbol': 'SOL'},
+            'polkadot': {'name': 'Polkadot', 'symbol': 'DOT'},
+            'dogecoin': {'name': 'Dogecoin', 'symbol': 'DOGE'},
+            'tron': {'name': 'TRON', 'symbol': 'TRX'},
+            'litecoin': {'name': 'Litecoin', 'symbol': 'LTC'}
+        }
+        
+        crypto_rates = {}
+        valid_count = 0
+        
+        for crypto_id, info in crypto_names.items():
+            if crypto_id in data:
+                crypto_data = data[crypto_id]
+                
+                # Проверяем что crypto_data - словарь
+                if not isinstance(crypto_data, dict):
+                    logger.warning(f"Данные для {crypto_id} не словарь: {type(crypto_data)}")
+                    continue
+                
+                # Получаем цены с проверкой
+                price_rub = crypto_data.get('rub')
+                price_usd = crypto_data.get('usd')
+                
+                # Получаем изменение цены (может быть под разными ключами)
+                change_24h = crypto_data.get('rub_24h_change') or crypto_data.get('usd_24h_change') or 0
+                
+                # Проверяем что цены есть и они числа
+                if price_rub is None or price_usd is None:
+                    logger.warning(f"Отсутствуют цены для {crypto_id}: RUB={price_rub}, USD={price_usd}")
+                    continue
+                
+                try:
+                    price_rub = float(price_rub)
+                    price_usd = float(price_usd)
+                    change_24h = float(change_24h) if change_24h is not None else 0
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"Ошибка преобразования данных для {crypto_id}: {e}")
+                    continue
+                
+                crypto_rates[crypto_id] = {
+                    'name': info['name'],
+                    'symbol': info['symbol'],
+                    'price_rub': price_rub,
+                    'price_usd': price_usd,
+                    'change_24h': change_24h,
+                    'last_updated': crypto_data.get('last_updated_at', 0)
+                }
+                valid_count += 1
+            else:
+                logger.warning(f"Криптовалюта {crypto_id} не найдена в ответе API")
+        
+        logger.info(f"Успешно обработано {valid_count} криптовалют")
+        
+        if crypto_rates:
+            crypto_rates['update_time'] = datetime.now().strftime('%d.%m.%Y %H:%M')
+            crypto_rates['source'] = 'coingecko'
+            return crypto_rates
+        else:
+            logger.error("Не найдено валидных данных по криптовалютам в ответе API")
+            return None
+            
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Сетевая ошибка при получении курсов криптовалют: {e}")
+        return None
+    except json.JSONDecodeError as e:
+        logger.error(f"Ошибка парсинга JSON от CoinGecko: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при получении курсов криптовалют: {e}")
+        return None
+
+def get_crypto_rates_fallback():
+    """Резервная функция для получения курсов криптовалют (демо-данные)"""
+    try:
+        # Демо-данные на случай недоступности API
+        crypto_rates = {
+            'bitcoin': {
+                'name': 'Bitcoin',
+                'symbol': 'BTC',
+                'price_rub': 4500000.0,
+                'price_usd': 50000.0,
+                'change_24h': 2.5,
+                'last_updated': datetime.now().timestamp()
+            },
+            'ethereum': {
+                'name': 'Ethereum', 
+                'symbol': 'ETH',
+                'price_rub': 300000.0,
+                'price_usd': 3300.0,
+                'change_24h': 1.2,
+                'last_updated': datetime.now().timestamp()
+            },
+            'binancecoin': {
+                'name': 'Binance Coin',
+                'symbol': 'BNB', 
+                'price_rub': 35000.0,
+                'price_usd': 380.0,
+                'change_24h': -0.5,
+                'last_updated': datetime.now().timestamp()
+            },
+            'ripple': {
+                'name': 'XRP',
+                'symbol': 'XRP',
+                'price_rub': 60.0,
+                'price_usd': 0.65,
+                'change_24h': 0.8,
+                'last_updated': datetime.now().timestamp()
+            },
+            'cardano': {
+                'name': 'Cardano',
+                'symbol': 'ADA',
+                'price_rub': 45.0,
+                'price_usd': 0.48,
+                'change_24h': -1.2,
+                'last_updated': datetime.now().timestamp()
+            }
+        }
+        
+        crypto_rates['update_time'] = datetime.now().strftime('%d.%m.%Y %H:%M')
+        crypto_rates['source'] = 'demo_fallback'
+        
+        logger.info("Используются демо-данные криптовалют")
+        return crypto_rates
+        
+    except Exception as e:
+        logger.error(f"Ошибка в fallback функции криптовалют: {e}")
+        return None
+
+def format_crypto_rates_message(crypto_rates: dict) -> str:
+    """Форматирует сообщение с курсами криптовалют"""
+    if not crypto_rates:
+        return "❌ Не удалось получить курсы криптовалют от CoinGecko API."
+    
+    message = f"₿ <b>КУРСЫ КРИПТОВАЛЮТ</b>\n\n"
+    
+    # Основные криптовалюты (первые 5)
+    main_cryptos = ['bitcoin', 'ethereum', 'binancecoin', 'ripple', 'cardano']
+    
+    for crypto_id in main_cryptos:
+        if crypto_id in crypto_rates:
+            data = crypto_rates[crypto_id]
+            
+            # Безопасное получение данных
+            name = data.get('name', 'N/A')
+            symbol = data.get('symbol', 'N/A')
+            price_rub = data.get('price_rub', 0)
+            price_usd = data.get('price_usd', 0)
+            change_24h = data.get('change_24h', 0)
+            
+            # Проверяем типы данных
+            try:
+                price_rub = float(price_rub)
+                price_usd = float(price_usd)
+                change_24h = float(change_24h)
+            except (TypeError, ValueError):
+                continue
+            
+            change_icon = "📈" if change_24h > 0 else "📉" if change_24h < 0 else "➡️"
+            
+            message += (
+                f"<b>{name} ({symbol})</b>\n"
+                f"   💰 <b>{price_rub:,.0f} руб.</b>\n"
+                f"   💵 {price_usd:,.2f} $\n"
+                f"   {change_icon} <i>{change_24h:+.2f}% (24ч)</i>\n\n"
+            )
+    
+    # Остальные криптовалюты
+    other_cryptos = [crypto_id for crypto_id in crypto_rates.keys() 
+                    if crypto_id not in main_cryptos and crypto_id not in ['update_time', 'source']]
+    
+    if other_cryptos:
+        message += "🔹 <b>Другие криптовалюты:</b>\n"
+        
+        for crypto_id in other_cryptos:
+            data = crypto_rates[crypto_id]
+            symbol = data.get('symbol', 'N/A')
+            price_rub = data.get('price_rub', 0)
+            change_24h = data.get('change_24h', 0)
+            
+            try:
+                price_rub = float(price_rub)
+                change_24h = float(change_24h)
+            except (TypeError, ValueError):
+                continue
+            
+            change_icon = "📈" if change_24h > 0 else "📉" if change_24h < 0 else "➡️"
+            
+            message += (
+                f"   <b>{symbol}</b>: {price_rub:,.0f} руб. {change_icon}\n"
+            )
+    
+    message += f"\n<i>Обновлено: {crypto_rates.get('update_time', 'неизвестно')}</i>\n\n"
+    message += "💡 <i>Данные предоставлены CoinGecko API</i>"
+    
+    if crypto_rates.get('source') == 'coingecko':
+        message += f"\n\n✅ <i>Официальные данные CoinGecko</i>"
+    
+    return message
+
+# =============================================================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С ИИ DEEPSEEK
+# =============================================================================
+
+async def ask_deepseek(prompt: str, context: ContextTypes.DEFAULT_TYPE = None) -> str:
+    """Отправляет запрос к API DeepSeek и возвращает ответ"""
+    if not DEEPSEEK_API_KEY:
+        return "❌ Функционал ИИ временно недоступен. Отсутствует API ключ."
+    
+    try:
+        url = f"{DEEPSEEK_API_BASE}chat/completions"
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {DEEPSEEK_API_KEY}'
+        }
+        
+        # УНИВЕРСАЛЬНЫЙ ПРОМПТ ДЛЯ ЛЮБЫХ ВОПРОСОВ
+        system_message = """Ты - универсальный ИИ помощник в телеграм боте. Ты помогаешь пользователям с любыми вопросами, включая:
+
+- 💰 Финансы: курсы валют, инвестиции, криптовалюты
+- 📊 Технологии: программирование, IT, разработка
+- 🎓 Образование: обучение, науки, исследования
+- 🎨 Творчество: искусство, музыка, литература
+- 🏥 Здоровье: медицина, спорт, образ жизни
+- 🌍 Путешествия: страны, культура, языки
+- 🔧 Советы: решение проблем, рекомендации
+- 💬 Общение: поддержка, мотивация
+
+Отвечай подробно, информативно и помогающе. Будь дружелюбным и поддерживающим собеседником."""
+        
+        data = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.7,
+            "max_tokens": 2000,  # Увеличим лимит токенов для более подробных ответов
+            "stream": False
+        }
+        
+        logger.info(f"Отправка запроса к DeepSeek API: {prompt[:100]}...")
+        
+        response = requests.post(url, headers=headers, json=data, timeout=30)
+        
+        if response.status_code == 200:
+            result = response.json()
+            answer = result['choices'][0]['message']['content']
+            logger.info("Успешно получен ответ от DeepSeek API")
+            return answer
+        elif response.status_code == 402:
+            logger.error("Недостаточно средств на счету DeepSeek API")
+            return "❌ Функционал ИИ временно недоступен. Недостаточно средств на API аккаунте. Обратитесь к администратору."
+        elif response.status_code == 401:
+            logger.error("Неверный API ключ DeepSeek")
+            return "❌ Ошибка аутентификации API. Проверьте API ключ."
+        elif response.status_code == 429:
+            logger.error("Превышен лимит запросов к DeepSeek API")
+            return "⏰ Превышен лимит запросов. Попробуйте позже."
+        else:
+            error_msg = f"Ошибка API DeepSeek: {response.status_code} - {response.text}"
+            logger.error(error_msg)
+            return f"❌ Временная ошибка сервиса ИИ. Попробуйте позже."
+            
+    except requests.exceptions.Timeout:
+        logger.error("Таймаут при запросе к DeepSeek API")
+        return "⏰ ИИ не успел обработать запрос. Попробуйте позже."
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Сетевая ошибка при запросе к DeepSeek API: {e}")
+        return "❌ Произошла сетевая ошибка. Проверьте подключение к интернету."
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка при работе с DeepSeek API: {e}")
+        return "❌ Произошла непредвиденная ошибка. Попробуйте позже."
