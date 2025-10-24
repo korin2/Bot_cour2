@@ -68,34 +68,60 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
-async def show_currency_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Показывает курсы валют"""
-    try:
-        rates_today, date_today, rates_tomorrow, changes = get_currency_rates_with_tomorrow()
-        
-        if not rates_today:
-            await update.effective_message.reply_text(
-                "❌ Не удалось получить курсы валют.", 
-                reply_markup=create_back_button()
-            )
-            return
-        
-        message = format_currency_rates_message(rates_today, date_today, rates_tomorrow, changes)
-        await update.effective_message.reply_text(message, parse_mode='HTML', reply_markup=create_back_button())
-        
-    except Exception as e:
-        logger.error(f"Ошибка при показе курсов валют: {e}")
-        await update.effective_message.reply_text("❌ Ошибка при получении данных.")
-
 async def show_key_rate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Показывает ключевую ставку с датами заседаний"""
     try:
         # Показываем сообщение о загрузке
-        loading_message = "🔄 <b>Загружаем данные по ключевой ставке...</b>"
+        loading_message = "🔄 <b>Загружаем данные по ключевой ставке и заседаниям ЦБ РФ...</b>"
         if update.callback_query:
             await update.callback_query.edit_message_text(loading_message, parse_mode='HTML')
         else:
             message = await update.message.reply_text(loading_message, parse_mode='HTML')
+        
+        # Получаем данные о ключевой ставке и заседаниях
+        data = get_key_rate_with_meetings()
+        key_rate_data = data['key_rate']
+        meeting_dates = data['meetings']
+        
+        if not key_rate_data:
+            error_msg = "❌ Не удалось получить ключевую ставку ЦБ РФ."
+            keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            if update.callback_query:
+                await update.callback_query.edit_message_text(error_msg, reply_markup=reply_markup)
+            else:
+                await message.edit_text(error_msg, reply_markup=reply_markup)
+            return
+        
+        message_text = format_key_rate_message(key_rate_data, meeting_dates)
+        
+        # Добавляем информацию о данных заседаний
+        if not meeting_dates:
+            message_text += "\n\n⚠️ <i>Используются примерные даты заседаний на основе исторических данных</i>"
+        
+        # Клавиатура с кнопками
+        keyboard = [
+            [InlineKeyboardButton("🔄 Обновить", callback_data='key_rate')],
+            [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(message_text, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            await message.edit_text(message_text, parse_mode='HTML', reply_markup=reply_markup)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при показе ключевой ставки: {e}")
+        error_msg = "❌ Произошла ошибка при получении ключевой ставки от ЦБ РФ."
+        keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        if update.callback_query:
+            await update.callback_query.message.reply_text(error_msg, reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(error_msg, reply_markup=reply_markup)
         
         # Получаем данные о ключевой ставке и заседаниях
         data = get_key_rate_with_meetings()
