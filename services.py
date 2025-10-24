@@ -916,3 +916,146 @@ async def send_daily_rates(context: ContextTypes.DEFAULT_TYPE):
                 
     except Exception as e:
         logger.error(f"Ошибка при ежедневной рассылке: {e}")
+
+
+# =============================================================================
+# ФУНКЦИИ ДЛЯ РАБОТЫ С ПОГОДОЙ
+# =============================================================================
+
+def get_weather_moscow():
+    """Получает текущую погоду в Москве через OpenWeatherMap API"""
+    try:
+        # Бесплатный API ключ от OpenWeatherMap (можно зарегистрировать бесплатно)
+        # Временный демо-ключ, лучше заменить на свой
+        API_KEY = "demo_key_12345"  # Замените на реальный API ключ
+        CITY = "Moscow"
+        URL = f"http://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={API_KEY}&units=metric&lang=ru"
+        
+        response = requests.get(URL, timeout=10)
+        
+        if response.status_code == 401:
+            # Если API ключ невалидный, используем демо-данные
+            logger.warning("Невалидный API ключ OpenWeatherMap, используем демо-данные")
+            return get_weather_demo()
+        elif response.status_code != 200:
+            logger.error(f"Ошибка API погоды: {response.status_code}")
+            return get_weather_demo()
+            
+        data = response.json()
+        
+        weather_info = {
+            'city': data['name'],
+            'temperature': round(data['main']['temp']),
+            'feels_like': round(data['main']['feels_like']),
+            'description': data['weather'][0]['description'].capitalize(),
+            'humidity': data['main']['humidity'],
+            'pressure': data['main']['pressure'],
+            'wind_speed': data['wind']['speed'],
+            'icon': data['weather'][0]['icon'],
+            'source': 'openweathermap'
+        }
+        
+        return weather_info
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении погоды: {e}")
+        return get_weather_demo()
+
+def get_weather_demo():
+    """Демо-данные погоды на случай недоступности API"""
+    import random
+    descriptions = [
+        "ясно", "переменная облачность", "облачно с прояснениями", 
+        "небольшой дождь", "пасмурно", "снег"
+    ]
+    
+    return {
+        'city': 'Москва',
+        'temperature': random.randint(-5, 25),
+        'feels_like': random.randint(-8, 28),
+        'description': random.choice(descriptions),
+        'humidity': random.randint(40, 90),
+        'pressure': random.randint(740, 780),
+        'wind_speed': round(random.uniform(1, 8), 1),
+        'icon': '02d',
+        'source': 'demo'
+    }
+
+def format_weather_message(weather_data):
+    """Форматирует сообщение с погодой"""
+    if not weather_data:
+        return "❌ Не удалось получить данные о погоде."
+    
+    # Эмодзи для разных типов погоды
+    weather_emojis = {
+        'ясно': '☀️',
+        'переменная облачность': '⛅',
+        'облачно с прояснениями': '🌤️',
+        'небольшой дождь': '🌦️',
+        'пасмурно': '☁️',
+        'снег': '❄️'
+    }
+    
+    emoji = weather_emojis.get(weather_data['description'].lower(), '🌡️')
+    
+    message = (
+        f"{emoji} <b>ПОГОДА В {weather_data['city'].upper()}</b>\n\n"
+        f"🌡️ <b>Температура:</b> {weather_data['temperature']}°C\n"
+        f"🤔 <b>Ощущается как:</b> {weather_data['feels_like']}°C\n"
+        f"📝 <b>Описание:</b> {weather_data['description']}\n"
+        f"💧 <b>Влажность:</b> {weather_data['humidity']}%\n"
+        f"📊 <b>Давление:</b> {weather_data['pressure']} мм рт.ст.\n"
+        f"💨 <b>Ветер:</b> {weather_data['wind_speed']} м/с\n\n"
+    )
+    
+    # Добавляем рекомендации по одежде
+    temp = weather_data['temperature']
+    if temp >= 20:
+        recommendation = "👕 Легкая одежда, можно в футболке"
+    elif temp >= 10:
+        recommendation = "🧥 Легкая куртка или кофта"
+    elif temp >= 0:
+        recommendation = "🧥 Теплая куртка, шапка"
+    else:
+        recommendation = "🧣 Зимняя куртка, шапка, шарф, перчатки"
+    
+    message += f"👗 <b>Рекомендация:</b> {recommendation}\n\n"
+    
+    if weather_data['source'] == 'demo':
+        message += "⚠️ <i>Используются демонстрационные данные</i>\n"
+    else:
+        message += "✅ <i>Данные от OpenWeatherMap</i>\n"
+    
+    message += f"🕒 <i>Обновлено: {datetime.now().strftime('%d.%m.%Y %H:%M')}</i>"
+    
+    return message
+
+async def send_daily_weather(context: ContextTypes.DEFAULT_TYPE):
+    """Ежедневная рассылка погоды"""
+    try:
+        from db import get_all_users
+        
+        users = await get_all_users()
+        if not users:
+            return
+        
+        # Получаем погоду
+        weather_data = get_weather_moscow()
+        message = format_weather_message(weather_data)
+        
+        # Добавляем заголовок для рассылки
+        full_message = f"🌅 <b>ЕЖЕДНЕВНАЯ РАССЫЛКА</b>\n\n{message}"
+        
+        # Отправляем всем пользователям
+        for user in users:
+            try:
+                await context.bot.send_message(
+                    chat_id=user['user_id'],
+                    text=full_message,
+                    parse_mode='HTML'
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки погоды пользователю {user['user_id']}: {e}")
+                
+    except Exception as e:
+        logger.error(f"Ошибка при ежедневной рассылке погоды: {e}")
