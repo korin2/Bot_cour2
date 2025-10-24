@@ -1,0 +1,10 @@
+[build]
+build_command = "chmod +x start.sh"
+
+[run]
+run_command = "./start.sh"
+
+[env]
+TELEGRAM_BOT_TOKEN = { required = true }
+DATABASE_URL = { required = true }
+TG_BOT_APIDEEPSEEK = { required = false }
