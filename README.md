@@ -19,3 +19,8 @@
 TELEGRAM_BOT_TOKEN=your_bot_token
 DATABASE_URL=your_database_url
 TG_BOT_APIDEEPSEEK=your_deepseek_api_key # опционально
+4. Запустите бота: `python bot/main.py`
+
+## Для развертывания на Railpack
+
+Проект готов к развертыванию на Railpack. Все необходимые конфигурационные файлы созданы.
