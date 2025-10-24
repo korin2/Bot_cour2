@@ -4,6 +4,7 @@ from config import TOKEN, logger
 from db import init_db
 from handlers import start, help_command, button_handler, show_currency_rates
 from handlers import handle_ai_message, alert_command, myalerts_command, show_key_rate, show_crypto_rates, show_ai_chat
+from jobs import setup_jobs
 
 async def post_init(application):
     """Функция инициализации после запуска бота"""
@@ -32,6 +33,9 @@ def main():
         # Обработчики кнопок и сообщений
         application.add_handler(CallbackQueryHandler(button_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
+
+        # Настройка фоновых задач
+        setup_jobs(application)
 
         logger.info("Бот запускается...")
         application.run_polling()
