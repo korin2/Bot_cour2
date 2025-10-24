@@ -36,6 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             
         keyboard.extend([
             [InlineKeyboardButton("🔔 Мои уведомления", callback_data='my_alerts')],
+            [InlineKeyboardButton("🔧 Прочие функции", callback_data='other_functions')],
             [InlineKeyboardButton("❓ Помощь", callback_data='help')],
         ])
         
@@ -189,6 +190,187 @@ async def show_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception as e:
         logger.error(f"Ошибка при показе чата с ИИ: {e}")
         await update.effective_message.reply_text("❌ Ошибка при запуске ИИ помощника.", reply_markup=create_back_button())
+
+async def show_other_functions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает меню прочих функций"""
+    try:
+        message = (
+            "🔧 <b>ПРОЧИЕ ФУНКЦИИ</b>\n\n"
+            "Выберите дополнительную функцию:\n\n"
+            
+            "📊 <b>Аналитика:</b>\n"
+            "• Статистика использования бота\n"
+            "• Графики изменения курсов\n"
+            "• Исторические данные\n\n"
+            
+            "⚙️ <b>Настройки:</b>\n"
+            "• Настройка уведомлений\n"
+            "• Выбор языка\n"
+            "• Часовой пояс\n\n"
+            
+            "🔍 <b>Дополнительно:</b>\n"
+            "• Информация о боте\n"
+            "• Связь с разработчиком\n"
+            "• Отзывы и предложения\n\n"
+            
+            "💡 <i>Эти функции находятся в разработке и будут добавлены в будущих обновлениях</i>"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("📊 Статистика", callback_data='stats')],
+            [InlineKeyboardButton("⚙️ Настройки", callback_data='settings')],
+            [InlineKeyboardButton("ℹ️ О боте", callback_data='about')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.message:
+            await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            await update.effective_message.edit_text(message, parse_mode='HTML', reply_markup=reply_markup)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при показе прочих функций: {e}")
+        await update.effective_message.reply_text("❌ Ошибка при загрузке функций.", reply_markup=create_back_button())
+
+async def show_bot_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает статистику бота"""
+    try:
+        from db import get_all_users, get_all_alerts
+        
+        users = await get_all_users()
+        alerts = await get_all_alerts()
+        
+        total_users = len(users)
+        total_alerts = len(alerts)
+        active_alerts = len([alert for alert in alerts if alert.get('is_active', True)])
+        
+        message = (
+            "📊 <b>СТАТИСТИКА БОТА</b>\n\n"
+            f"👥 <b>Всего пользователей:</b> {total_users}\n"
+            f"🔔 <b>Всего уведомлений:</b> {total_alerts}\n"
+            f"🟢 <b>Активных уведомлений:</b> {active_alerts}\n"
+            f"🔴 <b>Выполненных уведомлений:</b> {total_alerts - active_alerts}\n\n"
+            
+            "📈 <b>Популярные валюты для уведомлений:</b>\n"
+        )
+        
+        # Анализируем популярные валюты
+        currency_stats = {}
+        for alert in alerts:
+            currency = alert['from_currency']
+            currency_stats[currency] = currency_stats.get(currency, 0) + 1
+        
+        if currency_stats:
+            sorted_currencies = sorted(currency_stats.items(), key=lambda x: x[1], reverse=True)
+            for currency, count in sorted_currencies[:5]:  # Топ-5 валют
+                message += f"   • {currency}: {count} уведомлений\n"
+        else:
+            message += "   <i>Нет данных</i>\n"
+        
+        message += "\n💡 <i>Статистика обновляется в реальном времени</i>"
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Обновить", callback_data='stats')],
+            [InlineKeyboardButton("🔧 Прочие функции", callback_data='other_functions')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.effective_message.edit_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при показе статистики: {e}")
+        await update.effective_message.edit_text(
+            "❌ Ошибка при загрузке статистики.",
+            reply_markup=create_back_button()
+        )
+
+async def show_bot_about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает информацию о боте"""
+    try:
+        message = (
+            "ℹ️ <b>ИНФОРМАЦИЯ О БОТЕ</b>\n\n"
+            
+            "🤖 <b>Финансовый бот с ИИ помощником</b>\n\n"
+            
+            "📚 <b>Основные возможности:</b>\n"
+            "• 💱 Курсы валют ЦБ РФ с прогнозом\n"
+            "• ₿ Криптовалюты через CoinGecko API\n"
+            "• 💎 Ключевая ставка ЦБ РФ\n"
+            "• 🤖 Универсальный ИИ помощник\n"
+            "• 🔔 Умные уведомления\n"
+            "• 🌅 Ежедневная рассылка\n\n"
+            
+            "🛠 <b>Технологии:</b>\n"
+            "• Python 3.8+\n"
+            "• PostgreSQL\n"
+            "• python-telegram-bot\n"
+            "• DeepSeek AI API\n"
+            "• CoinGecko API\n"
+            "• ЦБ РФ API\n\n"
+            
+            "📞 <b>Поддержка:</b>\n"
+            "• Для связи с разработчиком используйте команду /feedback\n"
+            "• Сообщения об ошибках: /bugreport\n\n"
+            
+            "💡 <b>Версия:</b> 1.0.0\n"
+            "🔄 <b>Последнее обновление:</b> Октябрь 2024\n\n"
+            
+            "⭐ <i>Бот постоянно развивается и улучшается!</i>"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("📊 Статистика", callback_data='stats')],
+            [InlineKeyboardButton("🔧 Прочие функции", callback_data='other_functions')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.effective_message.edit_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при показе информации о боте: {e}")
+        await update.effective_message.edit_text(
+            "❌ Ошибка при загрузке информации.",
+            reply_markup=create_back_button()
+        )
+
+async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает настройки"""
+    try:
+        message = (
+            "⚙️ <b>НАСТРОЙКИ</b>\n\n"
+            
+            "🔔 <b>Уведомления:</b>\n"
+            "• Ежедневная рассылка: <b>Включено</b>\n"
+            "• Проверка уведомлений: <b>Каждые 30 минут</b>\n\n"
+            
+            "🌍 <b>Региональные настройки:</b>\n"
+            "• Часовой пояс: <b>Москва (UTC+3)</b>\n"
+            "• Язык: <b>Русский</b>\n\n"
+            
+            "📊 <b>Отображение:</b>\n"
+            "• Формат чисел: <b>С разделителями</b>\n"
+            "• Валюта по умолчанию: <b>RUB</b>\n\n"
+            
+            "💡 <i>Настройки будут доступны для изменения в будущих обновлениях</i>"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔧 Прочие функции", callback_data='other_functions')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.effective_message.edit_text(message, parse_mode='HTML', reply_markup=reply_markup)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при показе настроек: {e}")
+        await update.effective_message.edit_text(
+            "❌ Ошибка при загрузке настроек.",
+            reply_markup=create_back_button()
+        )
 
 async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обрабатывает текстовые сообщения для ИИ"""
@@ -435,6 +617,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
         keyboard.extend([
             [InlineKeyboardButton("🔔 Мои уведомления", callback_data='my_alerts')],
+            [InlineKeyboardButton("🔧 Прочие функции", callback_data='other_functions')],
             [InlineKeyboardButton("❓ Помощь", callback_data='help')],
         ])
         
@@ -472,6 +655,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await show_ai_chat(update, context)
         elif data == 'my_alerts':
             await myalerts_command(update, context)
+        elif data == 'other_functions':
+            await show_other_functions(update, context)
+        elif data == 'stats':
+            await show_bot_stats(update, context)
+        elif data == 'about':
+            await show_bot_about(update, context)
+        elif data == 'settings':
+            await show_settings(update, context)
         elif data == 'clear_all_alerts':
             user_id = update.effective_user.id
             await clear_user_alerts(user_id)
