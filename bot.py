@@ -1,5 +1,6 @@
 import logging
 import requests
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 from db import init_db, add_alert, update_user_info, get_all_users, get_user_alerts, remove_alert, get_all_active_alerts, clear_user_alerts
@@ -262,7 +263,7 @@ def get_inflation():
         }
 
 def get_metal_rates():
-    """Получает курсы драгоценных металлов через API ЦБ РФ с улучшенной обработкой ошибок"""
+    """Получает курсы драгоценных металлов через API ЦБ РФ"""
     try:
         date_req = datetime.now().strftime('%d/%m/%Y')
         url = f"{CBR_API_BASE}scripts/XML_metall.asp"
@@ -270,72 +271,66 @@ def get_metal_rates():
         
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/xml, text/xml, */*',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         }
         
         response = requests.get(url, params=params, headers=headers, timeout=15)
         response.raise_for_status()
         
-        # Получаем содержимое и декодируем
-        content = response.content.decode('windows-1251')
+        # Пробуем разные подходы к парсингу
+        metal_rates = parse_metal_rates_safe(response.content)
         
-        # Улучшенная очистка XML
-        content_clean = clean_xml_content(content)
-        
-        if not content_clean:
-            logger.error("Не удалось очистить XML содержимое")
+        if metal_rates:
+            metal_rates['update_date'] = datetime.now().strftime('%d.%m.%Y')
+            metal_rates['source'] = 'cbr_official'
+            return metal_rates
+        else:
             return None
             
-        # Парсим с помощью BeautifulSoup который более устойчив к ошибкам
-        return parse_metal_rates_with_bs(content_clean)
-            
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Сетевая ошибка при получении курсов металлов: {e}")
-        return None
     except Exception as e:
-        logger.error(f"Неожиданная ошибка при получении курсов металлов: {e}")
+        logger.error(f"Ошибка при получении курсов металлов: {e}")
         return None
 
-def clean_xml_content(content):
-    """Очищает XML содержимое от ошибок"""
+def parse_metal_rates_safe(content):
+    """Безопасный парсинг курсов металлов с несколькими методами"""
+    # Метод 1: Пробуем стандартный XML парсер с очисткой
+    result = parse_with_et_clean(content)
+    if result:
+        return result
+    
+    # Метод 2: Пробуем BeautifulSoup с html.parser
+    result = parse_with_bs_html(content)
+    if result:
+        return result
+        
+    # Метод 3: Пробуем ручной парсинг
+    result = parse_manually(content)
+    if result:
+        return result
+        
+    return None
+
+def parse_with_et_clean(content):
+    """Парсинг с помощью ElementTree с предварительной очисткой"""
     try:
-        # Удаляем BOM и другие невидимые символы
-        content = content.replace('\ufeff', '').replace('\x00', '')
+        # Декодируем и очищаем содержимое
+        text = content.decode('windows-1251')
         
-        # Удаляем всё до первого <
-        start_pos = content.find('<')
-        if start_pos == -1:
-            return None
-        content = content[start_pos:]
+        # Удаляем проблемные символы и исправляем XML
+        clean_text = clean_xml_text(text)
         
-        # Удаляем всё после последнего >
-        end_pos = content.rfind('>')
-        if end_pos == -1:
-            return None
-        content = content[:end_pos + 1]
-        
-        # Проверяем базовую структуру
-        if not content.strip().startswith('<?xml') and not content.strip().startswith('<Metall'):
-            # Если нет XML declaration, добавляем её
-            content = '<?xml version="1.0" encoding="windows-1251"?>' + content
-        
-        # Проверяем наличие корневого тега
-        if '<Metall>' not in content and '</Metall>' not in content:
-            # Если нет корневого тега, добавляем его
-            content = f'<Metall>{content}</Metall>'
-            
-        return content
+        root = ET.fromstring(clean_text)
+        return parse_metal_elements(root)
         
     except Exception as e:
-        logger.error(f"Ошибка при очистке XML: {e}")
+        logger.warning(f"ElementTree парсинг не удался: {e}")
         return None
 
-def parse_metal_rates_with_bs(xml_content):
-    """Парсит курсы металлов с помощью BeautifulSoup"""
+def parse_with_bs_html(content):
+    """Парсинг с помощью BeautifulSoup и html.parser"""
     try:
-        soup = BeautifulSoup(xml_content, 'xml')
+        text = content.decode('windows-1251')
+        soup = BeautifulSoup(text, 'html.parser')
         
         metal_rates = {}
         metals_map = {
@@ -345,29 +340,21 @@ def parse_metal_rates_with_bs(xml_content):
             '4': {'name': 'palladium', 'display': 'Палладий'}
         }
         
-        # Ищем все записи
-        records = soup.find_all('Record')
+        # Ищем записи по тегам
+        records = soup.find_all('record')
         
-        if not records:
-            logger.warning("Не найдено записей в XML")
-            return None
-            
         for record in records:
-            metal_code = record.get('Code')
+            metal_code = record.get('code')
             if metal_code in metals_map:
                 metal_info = metals_map[metal_code]
                 
-                # Ищем теги Buy и Sell
-                buy_elem = record.find('Buy')
-                sell_elem = record.find('Sell')
+                buy_elem = record.find('buy')
+                sell_elem = record.find('sell')
                 
                 if buy_elem and sell_elem:
                     try:
-                        buy_text = buy_elem.get_text(strip=True)
-                        sell_text = sell_elem.get_text(strip=True)
-                        
-                        buy_price = float(buy_text.replace(',', '.'))
-                        sell_price = float(sell_text.replace(',', '.'))
+                        buy_price = float(buy_elem.text.replace(',', '.'))
+                        sell_price = float(sell_elem.text.replace(',', '.'))
                         avg_price = (buy_price + sell_price) / 2
                         
                         metal_rates[metal_info['name']] = {
@@ -376,101 +363,168 @@ def parse_metal_rates_with_bs(xml_content):
                             'buy': buy_price,
                             'sell': sell_price
                         }
-                        
-                        logger.info(f"Успешно получен курс для {metal_info['display']}: {avg_price:.2f}")
-                        
                     except (ValueError, AttributeError) as e:
-                        logger.warning(f"Ошибка преобразования данных для металла {metal_code}: {e}")
+                        logger.warning(f"Ошибка данных для металла {metal_code}: {e}")
                         continue
         
-        if metal_rates:
-            metal_rates['update_date'] = datetime.now().strftime('%d.%m.%Y')
-            metal_rates['source'] = 'cbr_official'
-            logger.info(f"Успешно получены курсы для {len(metal_rates)} металлов")
-            return metal_rates
-        else:
-            logger.error("Не найдено валидных данных по металлам")
-            return None
-            
-    except Exception as e:
-        logger.error(f"Ошибка при парсинге XML с BeautifulSoup: {e}")
-        return None
-
-def get_metal_rates_alternative():
-    """Альтернативный метод получения курсов металлов"""
-    try:
-        # Пробуем получить данные в другом формате
-        today = datetime.now().strftime('%d/%m/%Y')
-        url = f"{CBR_API_BASE}scripts/XML_metall.asp"
-        params = {
-            'date_req': today,
-            'd': '0'  # Добавляем параметр для получения данных в другом формате
-        }
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': '*/*',
-        }
-        
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            # Пробуем разные кодировки
-            for encoding in ['windows-1251', 'utf-8', 'cp1251']:
-                try:
-                    content = response.content.decode(encoding)
-                    if 'Metall' in content or 'Record' in content:
-                        logger.info(f"Успешно декодировано с кодировкой: {encoding}")
-                        return parse_metal_rates_with_bs(content)
-                except UnicodeDecodeError:
-                    continue
-        
-        return None
+        return metal_rates if metal_rates else None
         
     except Exception as e:
-        logger.error(f"Ошибка в альтернативном методе: {e}")
+        logger.warning(f"BeautifulSoup HTML парсинг не удался: {e}")
         return None
 
-def get_metal_rates_fallback():
-    """Резервная функция для получения курсов металлов с реалистичными данными"""
+def parse_manually(content):
+    """Ручной парсинг с помощью строковых методов"""
     try:
-        # Более реалистичные демо-данные
-        import random
-        
-        # Базовые цены (примерные рыночные значения)
-        base_prices = {
-            'gold': 6500 + random.uniform(-100, 100),
-            'silver': 80 + random.uniform(-5, 5),
-            'platinum': 3200 + random.uniform(-50, 50),
-            'palladium': 3800 + random.uniform(-100, 100)
-        }
+        text = content.decode('windows-1251')
         
         metal_rates = {}
+        metals_map = {
+            '1': {'name': 'gold', 'display': 'Золото'},
+            '2': {'name': 'silver', 'display': 'Серебро'}, 
+            '3': {'name': 'platinum', 'display': 'Платина'},
+            '4': {'name': 'palladium', 'display': 'Палладий'}
+        }
         
-        for metal, base_price in base_prices.items():
-            # Добавляем небольшой спред между покупкой и продажей
-            spread = base_price * 0.02  # 2% спред
-            buy_price = round(base_price - spread/2, 2)
-            sell_price = round(base_price + spread/2, 2)
+        # Ищем блоки с записями
+        for metal_code, metal_info in metals_map.items():
+            # Ищем запись для этого металла
+            pattern = f'<Record Code="{metal_code}"'
+            start_idx = text.find(pattern)
+            if start_idx == -1:
+                continue
+                
+            # Извлекаем блок записи
+            record_end = text.find('</Record>', start_idx)
+            if record_end == -1:
+                continue
+                
+            record_block = text[start_idx:record_end + 9]
             
-            display_names = {
-                'gold': 'Золото',
-                'silver': 'Серебро',
-                'platinum': 'Платина',
-                'palladium': 'Палладий'
-            }
+            # Извлекаем цены
+            buy_match = re.search(r'<Buy>([0-9,]+)</Buy>', record_block)
+            sell_match = re.search(r'<Sell>([0-9,]+)</Sell>', record_block)
             
-            metal_rates[metal] = {
-                'price': round(base_price, 2),
-                'display_name': display_names[metal],
-                'buy': buy_price,
-                'sell': sell_price
-            }
+            if buy_match and sell_match:
+                try:
+                    buy_price = float(buy_match.group(1).replace(',', '.'))
+                    sell_price = float(sell_match.group(1).replace(',', '.'))
+                    avg_price = (buy_price + sell_price) / 2
+                    
+                    metal_rates[metal_info['name']] = {
+                        'price': avg_price,
+                        'display_name': metal_info['display'],
+                        'buy': buy_price,
+                        'sell': sell_price
+                    }
+                except ValueError as e:
+                    logger.warning(f"Ошибка преобразования цен для металла {metal_code}: {e}")
+                    continue
         
-        metal_rates['update_date'] = datetime.now().strftime('%d.%m.%Y')
+        return metal_rates if metal_rates else None
+        
+    except Exception as e:
+        logger.warning(f"Ручной парсинг не удался: {e}")
+        return None
+
+def clean_xml_text(text):
+    """Очистка XML текста"""
+    # Удаляем BOM и нулевые символы
+    text = text.replace('\ufeff', '').replace('\x00', '')
+    
+    # Удаляем всё до корневого элемента
+    start_tag = '<Metall>'
+    start_idx = text.find(start_tag)
+    if start_idx != -1:
+        text = text[start_idx:]
+    
+    # Убеждаемся что есть закрывающий тег
+    end_tag = '</Metall>'
+    if end_tag not in text:
+        # Добавляем закрывающий тег если его нет
+        last_record_end = text.rfind('</Record>')
+        if last_record_end != -1:
+            text = text[:last_record_end + 9] + '</Metall>'
+    
+    return text
+
+def parse_metal_elements(root):
+    """Парсинг элементов металлов из XML root"""
+    metal_rates = {}
+    metals_map = {
+        '1': {'name': 'gold', 'display': 'Золото'},
+        '2': {'name': 'silver', 'display': 'Серебро'}, 
+        '3': {'name': 'platinum', 'display': 'Платина'},
+        '4': {'name': 'palladium', 'display': 'Палладий'}
+    }
+    
+    for record in root.findall('Record'):
+        metal_code = record.get('Code')
+        if metal_code in metals_map:
+            metal_info = metals_map[metal_code]
+            
+            buy_elem = record.find('Buy')
+            sell_elem = record.find('Sell')
+            
+            if buy_elem is not None and sell_elem is not None:
+                try:
+                    buy_price = float(buy_elem.text.replace(',', '.'))
+                    sell_price = float(sell_elem.text.replace(',', '.'))
+                    avg_price = (buy_price + sell_price) / 2
+                    
+                    metal_rates[metal_info['name']] = {
+                        'price': avg_price,
+                        'display_name': metal_info['display'],
+                        'buy': buy_price,
+                        'sell': sell_price
+                    }
+                except (ValueError, AttributeError) as e:
+                    logger.warning(f"Ошибка данных для металла {metal_code}: {e}")
+                    continue
+    
+    return metal_rates
+
+def get_metal_rates_fallback():
+    """Резервная функция для получения курсов металлов"""
+    try:
+        # Реалистичные демо-данные на основе текущих рыночных цен
+        base_time = datetime.now()
+        
+        # Создаем небольшие случайные колебания вокруг базовых цен
+        import random
+        variation = random.uniform(0.95, 1.05)  # ±5% колебание
+        
+        metal_rates = {
+            'gold': {
+                'price': round(6500.0 * variation, 2),
+                'display_name': 'Золото',
+                'buy': round(6400.0 * variation, 2),
+                'sell': round(6600.0 * variation, 2)
+            },
+            'silver': {
+                'price': round(80.0 * variation, 2),
+                'display_name': 'Серебро',
+                'buy': round(78.0 * variation, 2),
+                'sell': round(82.0 * variation, 2)
+            },
+            'platinum': {
+                'price': round(3200.0 * variation, 2),
+                'display_name': 'Платина',
+                'buy': round(3150.0 * variation, 2),
+                'sell': round(3250.0 * variation, 2)
+            },
+            'palladium': {
+                'price': round(3800.0 * variation, 2),
+                'display_name': 'Палладий',
+                'buy': round(3750.0 * variation, 2),
+                'sell': round(3850.0 * variation, 2)
+            }
+        }
+        
+        metal_rates['update_date'] = base_time.strftime('%d.%m.%Y')
         metal_rates['source'] = 'demo_fallback'
         
-        logger.info("Используются улучшенные демо-данные по металлам")
+        logger.info("Используются демо-данные по металлам")
         return metal_rates
         
     except Exception as e:
@@ -867,6 +921,74 @@ def format_crypto_rates_message(crypto_rates: dict) -> str:
         message += f"\n\n✅ <i>Официальные данные CoinGecko</i>"
     
     return message
+
+async def show_metal_rates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Показывает курсы драгоценных металлов"""
+    try:
+        # Показываем сообщение о загрузке
+        loading_message = "🔄 <b>Загружаем курсы драгоценных металлов...</b>"
+        keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.callback_query:
+            message_obj = await update.callback_query.edit_message_text(loading_message, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            message_obj = await update.message.reply_text(loading_message, parse_mode='HTML', reply_markup=reply_markup)
+        
+        # Получаем данные
+        metal_rates = get_metal_rates()
+        
+        # Если не удалось получить данные, используем fallback
+        if not metal_rates:
+            logger.warning("Не удалось получить данные от ЦБ РФ, используем fallback")
+            metal_rates = get_metal_rates_fallback()
+        
+        if not metal_rates:
+            error_msg = (
+                "❌ <b>Не удалось получить курсы драгоценных металлов.</b>\n\n"
+                "Возможные причины:\n"
+                "• Временные проблемы с API ЦБ РФ\n"
+                "• Технические работы на сайте\n"
+                "• Изменение формата данных\n\n"
+                "Попробуйте позже."
+            )
+            
+            if update.callback_query:
+                await update.callback_query.edit_message_text(error_msg, parse_mode='HTML', reply_markup=reply_markup)
+            else:
+                await message_obj.edit_text(error_msg, parse_mode='HTML', reply_markup=reply_markup)
+            return
+        
+        message_text = format_metal_rates_message(metal_rates)
+        
+        # Добавляем предупреждение если используем демо-данные
+        if metal_rates.get('source') == 'demo_fallback':
+            message_text += "\n\n⚠️ <i>Используются демонстрационные данные (ЦБ РФ временно недоступен)</i>"
+        else:
+            message_text += "\n\n✅ <i>Данные получены через официальное API ЦБ РФ</i>"
+        
+        # Клавиатура с кнопками
+        keyboard = [
+            [InlineKeyboardButton("🔄 Обновить", callback_data='metal_rates')],
+            [InlineKeyboardButton("💱 Курсы валют", callback_data='currency_rates')],
+            [InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(message_text, parse_mode='HTML', reply_markup=reply_markup)
+        else:
+            await message_obj.edit_text(message_text, parse_mode='HTML', reply_markup=reply_markup)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при показе курсов металлов: {e}")
+        error_msg = "❌ Произошла ошибка при получении курсов драгоценных металлов."
+        keyboard = [[InlineKeyboardButton("🔙 Назад в меню", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        if update.callback_query:
+            await update.callback_query.message.reply_text(error_msg, reply_markup=reply_markup)
+        else:
+            await update.message.reply_text(error_msg, reply_markup=reply_markup)
 
 async def check_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Проверка условий уведомлений"""
