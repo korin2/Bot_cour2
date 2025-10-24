@@ -19,6 +19,11 @@ DEEPSEEK_API_KEY = os.getenv('TG_BOT_APIDEEPSEEK')
 CBR_API_BASE = "https://www.cbr.ru/"
 COINGECKO_API_BASE = "https://api.coingecko.com/api/v3/"
 DEEPSEEK_API_BASE = "https://api.deepseek.com/v1/"
+OPENWEATHER_API_BASE = "http://api.openweathermap.org/data/2.5/"
 
 # Поддерживаемые валюты
 SUPPORTED_CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CNY', 'CHF', 'CAD', 'AUD', 'TRY', 'KZT']
+
+# Настройки погоды
+WEATHER_CITY = "Moscow"
+WEATHER_API_KEY = os.getenv('OPENWEATHER_API_KEY', 'demo_key_12345')  # Замените на реальный ключ
