@@ -292,40 +292,6 @@ def get_key_rate_demo():
         'source': 'demo'
     }
 
-def format_key_rate_message(key_rate_data: dict, meeting_dates: list = None) -> str:
-    """Форматирует сообщение с ключевой ставкой и датами заседаний"""
-    if not key_rate_data:
-        return "❌ Не удалось получить данные по ключевой ставке от ЦБ РФ."
-    
-    rate = key_rate_data['rate']
-    source = key_rate_data.get('source', 'unknown')
-    
-    message = f"💎 <b>КЛЮЧЕВАЯ СТАВКА ЦБ РФ</b>\n\n"
-    message += f"<b>Текущее значение:</b> {rate:.2f}%\n"
-    message += f"<b>Дата установления:</b> {key_rate_data.get('date', 'неизвестно')}\n\n"
-    
-    # Добавляем информацию о заседаниях
-    if meeting_dates:
-        message += "<b>Следующие заседания ЦБ РФ:</b>\n"
-        for i, meeting in enumerate(meeting_dates, 1):
-            message += f"• {meeting['date_str']}\n"
-        message += "\n"
-    
-    message += "💡 <i>Ключевая ставка - это основная процентная ставка ЦБ РФ,\n"
-    message += "которая влияет на кредиты, депозиты и экономику в целом</i>"
-    
-    # Добавляем информацию об источнике данных
-    if source == 'cbr_parsed':
-        message += f"\n\n✅ <i>Данные получены с официального сайта ЦБ РФ</i>"
-    elif source == 'cbr_api':
-        message += f"\n\n✅ <i>Данные получены через API ЦБ РФ</i>"
-    elif source == 'demo':
-        message += f"\n\n⚠️ <i>Используются демонстрационные данные (ошибка получения реальных)</i>"
-    
-    return message
-
-# парсинг дат заседания ЦБ
-
 def get_meeting_dates():
     """Парсит даты заседаний Совета директоров ЦБ РФ по ключевой ставке"""
     try:
@@ -372,7 +338,7 @@ def get_meeting_dates():
                                         'formatted_date': parsed_date.strftime('%d.%m.%Y')
                                     })
                 
-                logger.info(f"Найдено {len([d for d in meeting_dates if url in d.get('source', '')])} заседаний на {url}")
+                logger.info(f"Найдено заседаний на {url}: {len([d for d in meeting_dates])}")
                 
             except Exception as e:
                 logger.error(f"Ошибка при парсинге {url}: {e}")
@@ -387,7 +353,7 @@ def get_meeting_dates():
         
         sorted_meetings = sorted(unique_dates.values(), key=lambda x: x['date_obj'])
         
-        # Ограничиваем количество выводимых дат (например, ближайшие 6)
+        # Ограничиваем количество выводимых дат (ближайшие 6)
         return sorted_meetings[:6]
         
     except Exception as e:
@@ -434,6 +400,37 @@ def get_key_rate_with_meetings():
         'meetings': meeting_dates
     }
 
+def format_key_rate_message(key_rate_data: dict, meeting_dates: list = None) -> str:
+    """Форматирует сообщение с ключевой ставкой и датами заседаний"""
+    if not key_rate_data:
+        return "❌ Не удалось получить данные по ключевой ставке от ЦБ РФ."
+    
+    rate = key_rate_data['rate']
+    source = key_rate_data.get('source', 'unknown')
+    
+    message = f"💎 <b>КЛЮЧЕВАЯ СТАВКА ЦБ РФ</b>\n\n"
+    message += f"<b>Текущее значение:</b> {rate:.2f}%\n"
+    message += f"<b>Дата установления:</b> {key_rate_data.get('date', 'неизвестно')}\n\n"
+    
+    # Добавляем информацию о заседаниях
+    if meeting_dates:
+        message += "<b>Следующие заседания ЦБ РФ:</b>\n"
+        for i, meeting in enumerate(meeting_dates, 1):
+            message += f"• {meeting['date_str']}\n"
+        message += "\n"
+    
+    message += "💡 <i>Ключевая ставка - это основная процентная ставка ЦБ РФ,\n"
+    message += "которая влияет на кредиты, депозиты и экономику в целом</i>"
+    
+    # Добавляем информацию об источнике данных
+    if source == 'cbr_parsed':
+        message += f"\n\n✅ <i>Данные получены с официального сайта ЦБ РФ</i>"
+    elif source == 'cbr_api':
+        message += f"\n\n✅ <i>Данные получены через API ЦБ РФ</i>"
+    elif source == 'demo':
+        message += f"\n\n⚠️ <i>Используются демонстрационные данные (ошибка получения реальных)</i>"
+    
+    return message
 
 # =============================================================================
 # ФУНКЦИИ ДЛЯ РАБОТЫ С КРИПТОВАЛЮТАМИ
@@ -462,17 +459,14 @@ def get_crypto_rates():
         }
         
         logger.info(f"Запрос к CoinGecko API: {url}")
-        logger.info(f"Параметры: {params}")
         
         response = requests.get(url, params=params, headers=headers, timeout=15)
         
         if response.status_code != 200:
             logger.error(f"Ошибка CoinGecko API: {response.status_code}")
-            logger.error(f"Текст ответа: {response.text}")
             return None
             
         data = response.json()
-        logger.info(f"Получены данные от CoinGecko: {type(data)}")
         
         # Проверяем структуру ответа
         if not isinstance(data, dict):
@@ -534,8 +528,6 @@ def get_crypto_rates():
                     'last_updated': crypto_data.get('last_updated_at', 0)
                 }
                 valid_count += 1
-            else:
-                logger.warning(f"Криптовалюта {crypto_id} не найдена в ответе API")
         
         logger.info(f"Успешно обработано {valid_count} криптовалют")
         
@@ -585,22 +577,6 @@ def get_crypto_rates_fallback():
                 'price_usd': 380.0,
                 'change_24h': -0.5,
                 'last_updated': datetime.now().timestamp()
-            },
-            'ripple': {
-                'name': 'XRP',
-                'symbol': 'XRP',
-                'price_rub': 60.0,
-                'price_usd': 0.65,
-                'change_24h': 0.8,
-                'last_updated': datetime.now().timestamp()
-            },
-            'cardano': {
-                'name': 'Cardano',
-                'symbol': 'ADA',
-                'price_rub': 45.0,
-                'price_usd': 0.48,
-                'change_24h': -1.2,
-                'last_updated': datetime.now().timestamp()
             }
         }
         
@@ -621,8 +597,8 @@ def format_crypto_rates_message(crypto_rates: dict) -> str:
     
     message = f"₿ <b>КУРСЫ КРИПТОВАЛЮТ</b>\n\n"
     
-    # Основные криптовалюты (первые 5)
-    main_cryptos = ['bitcoin', 'ethereum', 'binancecoin', 'ripple', 'cardano']
+    # Основные криптовалюты
+    main_cryptos = ['bitcoin', 'ethereum', 'binancecoin']
     
     for crypto_id in main_cryptos:
         if crypto_id in crypto_rates:
@@ -650,31 +626,6 @@ def format_crypto_rates_message(crypto_rates: dict) -> str:
                 f"   💰 <b>{price_rub:,.0f} руб.</b>\n"
                 f"   💵 {price_usd:,.2f} $\n"
                 f"   {change_icon} <i>{change_24h:+.2f}% (24ч)</i>\n\n"
-            )
-    
-    # Остальные криптовалюты
-    other_cryptos = [crypto_id for crypto_id in crypto_rates.keys() 
-                    if crypto_id not in main_cryptos and crypto_id not in ['update_time', 'source']]
-    
-    if other_cryptos:
-        message += "🔹 <b>Другие криптовалюты:</b>\n"
-        
-        for crypto_id in other_cryptos:
-            data = crypto_rates[crypto_id]
-            symbol = data.get('symbol', 'N/A')
-            price_rub = data.get('price_rub', 0)
-            change_24h = data.get('change_24h', 0)
-            
-            try:
-                price_rub = float(price_rub)
-                change_24h = float(change_24h)
-            except (TypeError, ValueError):
-                continue
-            
-            change_icon = "📈" if change_24h > 0 else "📉" if change_24h < 0 else "➡️"
-            
-            message += (
-                f"   <b>{symbol}</b>: {price_rub:,.0f} руб. {change_icon}\n"
             )
     
     message += f"\n<i>Обновлено: {crypto_rates.get('update_time', 'неизвестно')}</i>\n\n"
@@ -723,7 +674,7 @@ async def ask_deepseek(prompt: str, context: ContextTypes.DEFAULT_TYPE = None) -
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.7,
-            "max_tokens": 2000,  # Увеличим лимит токенов для более подробных ответов
+            "max_tokens": 2000,
             "stream": False
         }
         
