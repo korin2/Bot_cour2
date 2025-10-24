@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from config import TOKEN, logger
 from db import init_db
@@ -13,11 +14,18 @@ async def post_init(application):
     except Exception as e:
         logger.error(f"Ошибка при инициализации БД: {e}")
 
+async def error_handler(update, context):
+    """Обработчик ошибок"""
+    logger.error(f"Ошибка при обработке update {update}: {context.error}")
+
 def main():
     """Основная функция запуска бота"""
     try:
-        # Убедитесь, что предыдущий процесс бота остановлен
+        # Создаем application с обработчиком ошибок
         application = Application.builder().token(TOKEN).post_init(post_init).build()
+        
+        # Добавляем обработчик ошибок
+        application.add_error_handler(error_handler)
 
         # Регистрация обработчиков команд
         application.add_handler(CommandHandler("start", start))
@@ -35,10 +43,18 @@ def main():
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
 
         logger.info("Бот запускается...")
-        application.run_polling()
+        
+        # Запускаем с явным указанием allowed_updates
+        application.run_polling(
+            allowed_updates=['message', 'callback_query'],
+            drop_pending_updates=True  # Игнорируем накопленные updates
+        )
         
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
 
 if __name__ == '__main__':
+    # Добавляем проверку на множественный запуск
+    import sys
+    logger.info("Запуск бота...")
     main()
