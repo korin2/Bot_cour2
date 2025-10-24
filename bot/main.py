@@ -3,7 +3,7 @@ import sys
 import logging
 
 # Добавляем корневую директорию в путь для импортов
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from telegram.ext import Application
 
