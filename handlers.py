@@ -62,10 +62,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 /ai - Чат с ИИ помощником
 /myalerts - Мои уведомления
 /alert - Создать уведомление
+/weather - Погода в Москве
 /help - Эта справка
 
 💡 **Пример уведомления:**
 /alert USD RUB 80 above - уведомит когда USD превысит 80 руб.
+
+🌤️ **Погода:**
+Ежедневная рассылка в 08:00 МСК
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
